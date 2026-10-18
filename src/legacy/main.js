@@ -1,4 +1,5 @@
-import { state, persistWatchlist, persistTransactions, persistBudgets } from './utils/state.js';
+import { state, persistTransactions, persistBudgets } from './utils/state.js';
+import { addToWatchlist, removeFromWatchlist, markSynced, getWatchedIds, WATCHLIST_EVENT } from './utils/watchlist.js';
 import { buildModel, loadModel, trainOnDeals, saveModel } from './utils/tfModel.js';
 import { buildEmbeddingModel } from './utils/embedding.js';
 import { renderSearch, doSearch } from './components/Search.js';
@@ -478,22 +479,24 @@ window.removeSetFromTier  = removeSetFromTier;
 window.resetAllConfig     = resetAllConfig;
 window.setMLWeight        = setMLWeight;
 
-window.toggleWatch = async (itemId, title) => {
-  if (!state.watchlist) state.watchlist = [];
-  const already = state.watchlist.includes(itemId);
+// Only the id is passed from the button — titles can contain quotes that break inline onclick handlers.
+window.toggleWatch = async (itemId) => {
+  const listing = (state.results || []).find(r => r.itemId === itemId) || { itemId };
+  const title   = listing.title || 'item';
+  const already = getWatchedIds().includes(itemId);
 
   if (already) {
-    // Remove locally (eBay has no removeFromWatchlist API)
-    state.watchlist = state.watchlist.filter(id => id !== itemId);
-    persistWatchlist();
-    state.notify = { type: 'ok', msg: `Removed from local watchlist: ${title}` };
+    // Removed locally only (eBay has no removeFromWatchlist API)
+    removeFromWatchlist(itemId);
+    state.watchlist = getWatchedIds();
+    state.notify = { type: 'ok', msg: `Removed from watchlist: ${title}` };
     window.renderApp();
     return;
   }
 
   // Add locally first so UI responds immediately
-  state.watchlist = [...state.watchlist, itemId];
-  persistWatchlist();
+  addToWatchlist(listing);
+  state.watchlist = getWatchedIds();
   window.renderApp();
 
   // Sync to eBay if user token is available
@@ -508,15 +511,19 @@ window.toggleWatch = async (itemId, title) => {
       if (!resp.ok) {
         throw new Error(data.error || `eBay error ${resp.status}`);
       }
-      state.notify = { type: 'ok', msg: `♥ Added to your eBay watchlist: ${title}` };
+      markSynced(itemId);
+      state.notify = { type: 'ok', msg: `♥ Added to your watchlist and your eBay watchlist: ${title}` };
     } catch (err) {
-      state.notify = { type: 'err', msg: `Saved locally — eBay sync failed: ${err.message}` };
+      state.notify = { type: 'err', msg: `Added to your watchlist — eBay sync failed: ${err.message}` };
     }
   } else {
-    state.notify = { type: 'ok', msg: `♥ Added to local watchlist. Connect eBay to sync.` };
+    state.notify = { type: 'ok', msg: `♥ Added to your watchlist. Connect eBay in Settings to also sync it to eBay.` };
   }
   window.renderApp();
 };
+
+// Removing an item on the Watchlist page updates the hearts on search results too.
+window.addEventListener(WATCHLIST_EVENT, () => { state.watchlist = getWatchedIds(); });
 
 // Settings
 window.placeBid = async (itemId, title) => {

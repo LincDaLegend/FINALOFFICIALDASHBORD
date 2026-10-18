@@ -1,90 +1,78 @@
 import { useState } from 'react';
-import { Settings, Save, Trash2, Download, Upload, RefreshCw, AlertTriangle, Plus, X, CheckCircle, ExternalLink, Eye, EyeOff } from 'lucide-react';
+import { Settings, Save, Trash2, Download, Upload, AlertTriangle, X, CheckCircle, ExternalLink, Eye, EyeOff, TrendingUp } from 'lucide-react';
+// Same JSON-encoded keys the search tab reads, so values round-trip without stray quotes
+import { load, save, remove } from '../../legacy/utils/storage.js';
+import { getWatchlist, setWatchlist } from '../../legacy/utils/watchlist.js';
 
-// Read/write directly to the legacy localStorage keys
-const ls = {
-  get: (k, fallback = '') => { try { return localStorage.getItem(k) ?? fallback; } catch { return fallback; } },
-  set: (k, v) => { try { localStorage.setItem(k, v); } catch {} },
-  del: (k) => { try { localStorage.removeItem(k); } catch {} },
-};
-
-export default function BusinessSettings({ data, update, onSync, isSyncing }) {
-  const [sheetsUrl, setSheetsUrl] = useState(data.googleSheetsUrl || '');
-  const [phpRate,   setPhpRate]   = useState(data.phpRate || 57.2);
-  const [newCategory, setNewCategory] = useState('');
+export default function BusinessSettings({ data, update }) {
+  const [phpRate, setPhpRate] = useState(data.phpRate || 57.2);
   const [saved, setSaved] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState('');
 
-  // eBay credentials — stored in legacy localStorage keys
-  const [ebayKey,    setEbayKey]    = useState(() => ls.get('ebayKey'));
-  const [ebaySecret, setEbaySecret] = useState(() => ls.get('ebaySecret'));
-  const [ebayRuName, setEbayRuName] = useState(() => ls.get('ebayRuName'));
-  const [scpToken,   setScpToken]   = useState(() => ls.get('scpToken'));
-  const [showSecret, setShowSecret] = useState(false);
-  const [ebaySaved,  setEbaySaved]  = useState(false);
+  // eBay credentials — stored in the search tab's localStorage keys
+  const [ebayKey,     setEbayKey]     = useState(() => load('ebayKey', ''));
+  const [ebaySecret,  setEbaySecret]  = useState(() => load('ebaySecret', ''));
+  const [ebayRuName,  setEbayRuName]  = useState(() => load('ebayRuName', ''));
+  const [rapidApiKey, setRapidApiKey] = useState(() => load('rapidApiKey', ''));
+  const [showSecret,  setShowSecret]  = useState(false);
+  const [showRapid,   setShowRapid]   = useState(false);
+  const [ebaySaved,   setEbaySaved]   = useState(false);
+  const [rapidSaved,  setRapidSaved]  = useState(false);
 
-  const ebayUser    = ls.get('ebayUser', null);
-  const ebayTokenExp = parseInt(ls.get('ebayTokenExp', '0')) || 0;
-  const tokenValid  = ebayTokenExp > Date.now() / 1000;
+  const ebayUser     = load('ebayUser', null);
+  const ebayTokenExp = parseInt(load('ebayTokenExp', 0)) || 0;
+  const tokenValid   = ebayTokenExp > Date.now() / 1000;
 
-  const saveSettings = () => {
-    update(prev => ({ ...prev, googleSheetsUrl: sheetsUrl, phpRate: parseFloat(phpRate) || prev.phpRate }));
-    // Also sync into legacy state
-    import('../../legacy/utils/state.js').then(({ state: ls2, persistSettings }) => {
-      ls2.phpRate     = parseFloat(phpRate) || ls2.phpRate;
-      ls2.gasWriteUrl = sheetsUrl;
+  const syncLegacy = (fn) => {
+    import('../../legacy/utils/state.js').then(({ state, persistSettings }) => {
+      fn(state);
       persistSettings?.();
     }).catch(() => {});
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+  };
+
+  const flash = (setter) => { setter(true); setTimeout(() => setter(false), 2000); };
+
+  const saveSettings = () => {
+    const rate = parseFloat(phpRate) || data.phpRate;
+    update(prev => ({ ...prev, phpRate: rate }));
+    syncLegacy(s => { s.phpRate = rate; });
+    flash(setSaved);
   };
 
   const saveEbayCredentials = () => {
-    ls.set('ebayKey',    ebayKey.trim());
-    ls.set('ebaySecret', ebaySecret.trim());
-    ls.set('ebayRuName', ebayRuName.trim());
-    ls.set('scpToken',   scpToken.trim());
-    // Sync into running legacy state if available
-    import('../../legacy/utils/state.js').then(({ state: ls2, persistSettings }) => {
-      ls2.ebayKey    = ebayKey.trim();
-      ls2.ebaySecret = ebaySecret.trim();
-      ls2.ebayRuName = ebayRuName.trim();
-      ls2.scpToken   = scpToken.trim();
-      persistSettings?.();
-    }).catch(() => {});
-    setEbaySaved(true);
-    setTimeout(() => setEbaySaved(false), 2000);
+    const k = ebayKey.trim(), s = ebaySecret.trim(), r = ebayRuName.trim();
+    save('ebayKey', k); save('ebaySecret', s); save('ebayRuName', r);
+    syncLegacy(st => { st.ebayKey = k; st.ebaySecret = s; st.ebayRuName = r; });
+    flash(setEbaySaved);
+  };
+
+  const saveRapidApiKey = () => {
+    const k = rapidApiKey.trim();
+    save('rapidApiKey', k);
+    remove('scpToken'); // old SportsCardsPro token — would otherwise be sent as the RapidAPI key
+    syncLegacy(st => { st.rapidApiKey = k; });
+    flash(setRapidSaved);
   };
 
   const clearEbayCredentials = () => {
-    ['ebayKey','ebaySecret','ebayRuName','ebayToken','ebayTokenExp','ebayRefresh','ebayUser'].forEach(k => ls.del(k));
+    ['ebayKey', 'ebaySecret', 'ebayRuName', 'ebayToken', 'ebayTokenExp', 'ebayRefresh', 'ebayUser'].forEach(remove);
     setEbayKey(''); setEbaySecret(''); setEbayRuName('');
-    import('../../legacy/utils/state.js').then(({ state: ls2 }) => {
-      ls2.ebayKey = ''; ls2.ebaySecret = ''; ls2.ebayRuName = '';
-      ls2.ebayToken = null; ls2.ebayUser = null;
-    }).catch(() => {});
+    syncLegacy(st => {
+      st.ebayKey = ''; st.ebaySecret = ''; st.ebayRuName = '';
+      st.ebayToken = null; st.ebayUser = null;
+    });
   };
 
   const connectEbayAccount = () => {
     if (!ebayKey.trim() || !ebaySecret.trim() || !ebayRuName.trim()) return;
-    // Save first, then trigger the legacy OAuth flow
+    // Save first, then trigger the search tab's OAuth flow
     saveEbayCredentials();
     setTimeout(() => window.connectEbayAccount?.(), 100);
   };
 
-  const addCategory = () => {
-    const cat = newCategory.trim();
-    if (!cat || (data.categories || []).includes(cat)) return;
-    update(prev => ({ ...prev, categories: [...(prev.categories || []), cat] }));
-    setNewCategory('');
-  };
-
-  const removeCategory = (cat) => {
-    update(prev => ({ ...prev, categories: (prev.categories || []).filter(c => c !== cat) }));
-  };
-
   const exportData = () => {
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const backup = { ...data, watchlistItems: getWatchlist() };
+    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -98,19 +86,27 @@ export default function BusinessSettings({ data, update, onSync, isSyncing }) {
     if (!file) return;
     const reader = new FileReader();
     reader.onload = (ev) => {
-      try { update(() => JSON.parse(ev.target.result)); }
-      catch { alert('Invalid file format.'); }
+      try {
+        const { watchlistItems, ...rest } = JSON.parse(ev.target.result);
+        update(() => rest);
+        if (Array.isArray(watchlistItems)) setWatchlist(watchlistItems);
+      } catch {
+        alert('Invalid file format.');
+      }
     };
     reader.readAsText(file);
     e.target.value = '';
   };
 
   const resetSection = (section) => {
-    if (section === 'sales')     update(prev => ({ ...prev, sales: [] }));
-    if (section === 'inventory') update(prev => ({ ...prev, inventory: [] }));
-    if (section === 'expenses')  update(prev => ({ ...prev, expenses: [] }));
-    if (section === 'all')       update(prev => ({ ...prev, sales: [], inventory: [], expenses: [], shippingBatches: [] }));
+    if (section === 'watchlist') setWatchlist([]);
+    if (section === 'records')   update(prev => ({ ...prev, sales: [], inventory: [], expenses: [], shippingBatches: [] }));
     setShowResetConfirm('');
+  };
+
+  const RESETS = {
+    watchlist: { label: 'Clear Watchlist',            confirm: 'clear your whole watchlist' },
+    records:   { label: 'Delete Old Business Records', confirm: 'delete your old sales, inventory and expense records' },
   };
 
   const Field = ({ label, hint, children }) => (
@@ -131,6 +127,22 @@ export default function BusinessSettings({ data, update, onSync, isSyncing }) {
     </div>
   );
 
+  const SaveButton = ({ onClick, done, label }) => (
+    <button onClick={onClick}
+      className="flex items-center gap-2 px-4 py-2.5 bg-slate-800 text-white rounded-xl font-bold text-sm hover:bg-slate-700 transition-colors"
+    >
+      {done ? <CheckCircle className="w-4 h-4" /> : <Save className="w-4 h-4" />}
+      {done ? 'Saved!' : label}
+    </button>
+  );
+
+  const ExtLink = ({ href, children }) => (
+    <a href={href} target="_blank" rel="noopener noreferrer"
+      className="text-emerald-600 font-semibold hover:underline inline-flex items-center gap-1">
+      {children} <ExternalLink className="w-3 h-3" />
+    </a>
+  );
+
   const inputCls = "w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm bg-slate-50 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono";
 
   return (
@@ -139,33 +151,12 @@ export default function BusinessSettings({ data, update, onSync, isSyncing }) {
       {/* General */}
       <Section title="General Settings" icon={Settings}>
         <div className="space-y-4">
-          <Field label="PHP Exchange Rate (₱ per $1)">
+          <Field label="PHP Exchange Rate (₱ per $1)" hint="Used to show eBay prices in pesos.">
             <input type="number" min="1" step="0.1" value={phpRate} onChange={e => setPhpRate(e.target.value)}
               className="w-40 px-3 py-2.5 border border-slate-200 rounded-xl text-sm bg-slate-50 focus:outline-none focus:ring-2 focus:ring-emerald-500"
             />
           </Field>
-          <Field label="Google Apps Script URL" hint="Used for syncing sales and inventory data to Google Sheets.">
-            <input value={sheetsUrl} onChange={e => setSheetsUrl(e.target.value)}
-              className={inputCls + " text-xs"}
-              placeholder="https://script.google.com/macros/s/…"
-            />
-          </Field>
-          <div className="flex gap-3">
-            <button onClick={saveSettings}
-              className="flex items-center gap-2 px-4 py-2.5 bg-slate-800 text-white rounded-xl font-bold text-sm hover:bg-slate-700 transition-colors"
-            >
-              {saved ? <CheckCircle className="w-4 h-4" /> : <Save className="w-4 h-4" />}
-              {saved ? 'Saved!' : 'Save Settings'}
-            </button>
-            {onSync && (
-              <button onClick={onSync} disabled={isSyncing}
-                className="flex items-center gap-2 px-4 py-2.5 bg-blue-50 text-blue-600 rounded-xl font-bold text-sm hover:bg-blue-100 transition-colors disabled:opacity-50 border border-blue-100"
-              >
-                <RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin' : ''}`} />
-                {isSyncing ? 'Syncing…' : 'Sync Now'}
-              </button>
-            )}
-          </div>
+          <SaveButton onClick={saveSettings} done={saved} label="Save Settings" />
         </div>
       </Section>
 
@@ -173,12 +164,8 @@ export default function BusinessSettings({ data, update, onSync, isSyncing }) {
       <Section title="eBay API Credentials" icon={Settings}>
         <div className="space-y-4">
           <p className="text-xs text-slate-400">
-            Get your keys at{' '}
-            <a href="https://developer.ebay.com" target="_blank" rel="noopener"
-              className="text-emerald-600 font-semibold hover:underline inline-flex items-center gap-1">
-              developer.ebay.com <ExternalLink className="w-3 h-3" />
-            </a>
-            {' '}→ Application Keys.
+            Get your keys at <ExtLink href="https://developer.ebay.com/my/keys">developer.ebay.com</ExtLink> → Application Keys (Production).
+            You can also set them on the server instead — see the README.
           </p>
 
           <Field label="App ID (Client ID)">
@@ -203,7 +190,7 @@ export default function BusinessSettings({ data, update, onSync, isSyncing }) {
 
           <Field
             label="RuName"
-            hint="From eBay developer portal → User Tokens → Get a Token from eBay via Your Application."
+            hint="Only needed to connect your eBay account (so watched items also land on your eBay watchlist). From eBay developer portal → User Tokens → Get a Token from eBay via Your Application."
           >
             <input value={ebayRuName} onChange={e => setEbayRuName(e.target.value)}
               className={inputCls} placeholder="YourApp-YourApp-Prod-…" />
@@ -224,18 +211,14 @@ export default function BusinessSettings({ data, update, onSync, isSyncing }) {
                 </button>
               : <button onClick={connectEbayAccount}
                   disabled={!ebayKey.trim() || !ebaySecret.trim() || !ebayRuName.trim()}
+                  title={!ebayKey.trim() || !ebaySecret.trim() || !ebayRuName.trim() ? 'Fill in App ID, Client Secret and RuName first' : undefined}
                   className="text-xs font-bold bg-slate-800 text-white px-3 py-1.5 rounded-lg hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
                   Connect Account
                 </button>}
           </div>
 
           <div className="flex gap-3">
-            <button onClick={saveEbayCredentials}
-              className="flex items-center gap-2 px-4 py-2.5 bg-slate-800 text-white rounded-xl font-bold text-sm hover:bg-slate-700 transition-colors"
-            >
-              {ebaySaved ? <CheckCircle className="w-4 h-4" /> : <Save className="w-4 h-4" />}
-              {ebaySaved ? 'Saved!' : 'Save Credentials'}
-            </button>
+            <SaveButton onClick={saveEbayCredentials} done={ebaySaved} label="Save Credentials" />
             {ebayKey && (
               <button onClick={clearEbayCredentials}
                 className="flex items-center gap-2 px-4 py-2.5 bg-red-50 text-red-600 rounded-xl font-bold text-sm hover:bg-red-100 transition-colors border border-red-100"
@@ -247,63 +230,37 @@ export default function BusinessSettings({ data, update, onSync, isSyncing }) {
         </div>
       </Section>
 
-      {/* SportsCardsPro */}
-      <Section title="SportsCardsPro Token" icon={Settings}>
+      {/* Sold prices */}
+      <Section title="Sold Prices (RapidAPI)" icon={TrendingUp}>
         <div className="space-y-3">
           <p className="text-xs text-slate-400">
-            Find your token at{' '}
-            <a href="https://www.sportscardspro.com" target="_blank" rel="noopener"
-              className="text-emerald-600 font-semibold hover:underline inline-flex items-center gap-1">
-              sportscardspro.com <ExternalLink className="w-3 h-3" />
-            </a>
-            {' '}→ Account Settings. Enables real sold-price data in search results.
+            Subscribe to <ExtLink href="https://rapidapi.com/ecommet/api/ebay-average-selling-price">eBay Average Selling Price</ExtLink> on
+            RapidAPI and paste your key here. It lets deal scores compare against real eBay sold prices.
+            Or set <code className="font-mono text-slate-500">RAPIDAPI_KEY</code> on the server — see the README.
           </p>
-          <input value={scpToken} onChange={e => setScpToken(e.target.value)}
-            className={inputCls} placeholder="40-character token" />
-          {scpToken
-            ? <p className="text-xs text-emerald-600 font-semibold">✓ Token saved — market prices use real sold data.</p>
-            : <p className="text-xs text-slate-400">Not configured — market prices use live eBay listing prices.</p>}
-          <button onClick={saveEbayCredentials}
-            className="flex items-center gap-2 px-4 py-2.5 bg-slate-800 text-white rounded-xl font-bold text-sm hover:bg-slate-700 transition-colors"
-          >
-            {ebaySaved ? <CheckCircle className="w-4 h-4" /> : <Save className="w-4 h-4" />}
-            {ebaySaved ? 'Saved!' : 'Save Token'}
-          </button>
-        </div>
-      </Section>
-
-      {/* Categories */}
-      <Section title="Expense Categories" icon={Settings}>
-        <div className="space-y-3">
-          <div className="flex flex-wrap gap-2">
-            {(data.categories || []).map(cat => (
-              <div key={cat} className="flex items-center gap-1.5 bg-slate-100 rounded-lg px-3 py-1.5">
-                <span className="text-sm font-medium text-slate-700">{cat}</span>
-                <button onClick={() => removeCategory(cat)} className="text-slate-400 hover:text-red-500 transition-colors">
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            ))}
-          </div>
-          <div className="flex gap-2">
-            <input value={newCategory} onChange={e => setNewCategory(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && addCategory()}
-              className="flex-1 px-3 py-2 border border-slate-200 rounded-xl text-sm bg-slate-50 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-              placeholder="New category name…"
+          <div className="relative">
+            <input
+              type={showRapid ? 'text' : 'password'}
+              value={rapidApiKey} onChange={e => setRapidApiKey(e.target.value)}
+              className={inputCls + " pr-10"} placeholder="Your RapidAPI key"
             />
-            <button onClick={addCategory}
-              className="px-3 py-2 bg-slate-800 text-white rounded-xl text-sm font-bold hover:bg-slate-700 transition-colors"
+            <button type="button" onClick={() => setShowRapid(v => !v)}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
             >
-              <Plus className="w-4 h-4" />
+              {showRapid ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
             </button>
           </div>
+          {rapidApiKey.trim()
+            ? <p className="text-xs text-emerald-600 font-semibold">✓ Key entered — deal scores use real sold prices.</p>
+            : <p className="text-xs text-slate-400">No key here — the server’s RAPIDAPI_KEY is used if set, otherwise scores compare live listings only.</p>}
+          <SaveButton onClick={saveRapidApiKey} done={rapidSaved} label="Save Key" />
         </div>
       </Section>
 
       {/* Data Backup */}
       <Section title="Data Backup" icon={Download}>
         <div className="space-y-3">
-          <p className="text-sm text-slate-500">Export your data as JSON or import a previously exported file.</p>
+          <p className="text-sm text-slate-500">Export your watchlist and saved business records as one JSON file, or import a previously exported file.</p>
           <div className="flex gap-3">
             <button onClick={exportData}
               className="flex items-center gap-2 px-4 py-2.5 bg-emerald-600 text-white rounded-xl font-bold text-sm hover:bg-emerald-700 transition-colors"
@@ -329,7 +286,7 @@ export default function BusinessSettings({ data, update, onSync, isSyncing }) {
           {showResetConfirm && (
             <div className="bg-red-50 border border-red-200 rounded-xl p-4">
               <p className="text-sm text-red-700 font-semibold mb-3">
-                Are you sure you want to reset {showResetConfirm === 'all' ? 'ALL data' : showResetConfirm}?
+                Are you sure you want to {RESETS[showResetConfirm].confirm}?
               </p>
               <div className="flex gap-2">
                 <button onClick={() => resetSection(showResetConfirm)}
@@ -342,14 +299,9 @@ export default function BusinessSettings({ data, update, onSync, isSyncing }) {
             </div>
           )}
           <div className="flex flex-wrap gap-2">
-            {[
-              { key: 'sales',     label: 'Reset Sales' },
-              { key: 'inventory', label: 'Reset Inventory' },
-              { key: 'expenses',  label: 'Reset Expenses' },
-              { key: 'all',       label: 'Reset Everything' },
-            ].map(({ key, label }) => (
+            {Object.entries(RESETS).map(([key, { label }]) => (
               <button key={key} onClick={() => setShowResetConfirm(key)}
-                className={`flex items-center gap-2 px-4 py-2 rounded-xl font-bold text-sm transition-colors ${key === 'all' ? 'bg-red-600 text-white hover:bg-red-700' : 'bg-slate-100 text-slate-600 hover:bg-red-50 hover:text-red-600'}`}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl font-bold text-sm transition-colors bg-slate-100 text-slate-600 hover:bg-red-50 hover:text-red-600"
               >
                 <Trash2 className="w-3.5 h-3.5" /> {label}
               </button>

@@ -228,7 +228,7 @@ function renderResults() {
           <!-- Big watchlist button -->
           ${r.itemId ? `
           <button
-            onclick="window.toggleWatch('${r.itemId}', '${escHtml(r.title)}')"
+            onclick="window.toggleWatch('${escHtml(r.itemId)}')"
             style="margin-top:10px;width:100%;padding:9px 0;border-radius:8px;border:1.5px solid ${watched ? 'var(--accent)' : 'var(--border)'};background:${watched ? 'var(--accent-dim)' : 'var(--bg)'};color:${watched ? 'var(--accent)' : 'var(--text-muted)'};font-size:13px;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:5px;transition:all 0.15s"
           >${watched ? '♥' : '♡'} ${watched ? 'Watching' : 'Watchlist'}</button>` : ''}
 

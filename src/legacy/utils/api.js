@@ -170,14 +170,14 @@ function extractParallel(title) {
 // Compute market price reference from the already-fetched live listings.
 // Groups by (grade + parallel tier) for accurate like-for-like comparison.
 // Falls back to grade-only group when a tier group has fewer than 2 items.
-// Fetch market prices from SportsCardsPro API.
+// Fetch sold prices from RapidAPI (eBay Average Selling Price) via /api/ebay/sold.
+// Uses the key from Settings if there is one; otherwise the server falls back to its
+// RAPIDAPI_KEY env var, and returns an error (→ null here) if neither is set.
 // Returns byGrade prices keyed to our grade system, or null on failure.
 export async function fetchSoldMarketValue(query) {
-  if (!state.rapidApiKey) return null;
   try {
-    const resp = await fetch(`/api/ebay/sold?q=${encodeURIComponent(query)}`, {
-      headers: { 'x-rapidapi-key': state.rapidApiKey },
-    });
+    const headers = state.rapidApiKey ? { 'x-rapidapi-key': state.rapidApiKey } : {};
+    const resp = await fetch(`/api/ebay/sold?q=${encodeURIComponent(query)}`, { headers });
     if (!resp.ok) return null;
     const data = await resp.json();
     if (data.error || !data.weightedMean) return null;

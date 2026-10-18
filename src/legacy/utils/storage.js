@@ -1,11 +1,17 @@
 export function load(key, defaultVal) {
+  let raw;
   try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return defaultVal;
+    raw = localStorage.getItem(key);
+  } catch {
+    return defaultVal;
+  }
+  if (!raw) return defaultVal;
+  try {
     const parsed = JSON.parse(raw);
     return (parsed !== null && parsed !== undefined) ? parsed : defaultVal;
   } catch {
-    return defaultVal;
+    // Older Settings code wrote some keys as plain text, not JSON — still use them.
+    return raw;
   }
 }
 
