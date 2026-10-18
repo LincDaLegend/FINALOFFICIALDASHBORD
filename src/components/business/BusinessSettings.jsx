@@ -3,6 +3,7 @@ import { Settings, Save, Trash2, Download, Upload, AlertTriangle, X, CheckCircle
 // Same JSON-encoded keys the search tab reads, so values round-trip without stray quotes
 import { load, save, remove } from '../../legacy/utils/storage.js';
 import { getWatchlist, setWatchlist } from '../../legacy/utils/watchlist.js';
+import { startEbayConnect, ebayCallbackUrl } from '../../legacy/utils/ebayConnect.js';
 
 export default function BusinessSettings({ data, update }) {
   const [phpRate, setPhpRate] = useState(data.phpRate || 57.2);
@@ -18,10 +19,13 @@ export default function BusinessSettings({ data, update }) {
   const [showRapid,   setShowRapid]   = useState(false);
   const [ebaySaved,   setEbaySaved]   = useState(false);
   const [rapidSaved,  setRapidSaved]  = useState(false);
+  const [connectError, setConnectError] = useState('');
+  const [connecting,   setConnecting]   = useState(false);
+  const [copied,       setCopied]       = useState(false);
 
   const ebayUser     = load('ebayUser', null);
   const ebayTokenExp = parseInt(load('ebayTokenExp', 0)) || 0;
-  const tokenValid   = ebayTokenExp > Date.now() / 1000;
+  const tokenValid   = ebayTokenExp > Date.now(); // stored in milliseconds by /api/ebay/callback
 
   const syncLegacy = (fn) => {
     import('../../legacy/utils/state.js').then(({ state, persistSettings }) => {
@@ -63,11 +67,23 @@ export default function BusinessSettings({ data, update }) {
     });
   };
 
-  const connectEbayAccount = () => {
+  const connectEbayAccount = async () => {
     if (!ebayKey.trim() || !ebaySecret.trim() || !ebayRuName.trim()) return;
-    // Save first, then trigger the search tab's OAuth flow
     saveEbayCredentials();
-    setTimeout(() => window.connectEbayAccount?.(), 100);
+    setConnectError('');
+    setConnecting(true);
+    try {
+      await startEbayConnect({ appId: ebayKey.trim(), clientSecret: ebaySecret.trim(), ruName: ebayRuName.trim() });
+    } catch (e) {
+      setConnectError(e.message);
+      setConnecting(false);
+    }
+  };
+
+  const callbackUrl = typeof window !== 'undefined' ? ebayCallbackUrl() : '/api/ebay/callback';
+  const isLocal = typeof window !== 'undefined' && /^(localhost|127\.|192\.168\.)/.test(window.location.hostname);
+  const copyCallback = () => {
+    navigator.clipboard?.writeText(callbackUrl).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); }).catch(() => {});
   };
 
   const exportData = () => {
@@ -210,11 +226,36 @@ export default function BusinessSettings({ data, update }) {
                   Disconnect
                 </button>
               : <button onClick={connectEbayAccount}
-                  disabled={!ebayKey.trim() || !ebaySecret.trim() || !ebayRuName.trim()}
+                  disabled={connecting || !ebayKey.trim() || !ebaySecret.trim() || !ebayRuName.trim()}
                   title={!ebayKey.trim() || !ebaySecret.trim() || !ebayRuName.trim() ? 'Fill in App ID, Client Secret and RuName first' : undefined}
                   className="text-xs font-bold bg-slate-800 text-white px-3 py-1.5 rounded-lg hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
-                  Connect Account
+                  {connecting ? 'Opening eBay…' : 'Connect Account'}
                 </button>}
+          </div>
+
+          {connectError && (
+            <div className="bg-red-50 border border-red-200 rounded-xl p-3 flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5" />
+              <p className="text-xs text-red-700 font-semibold">{connectError}</p>
+            </div>
+          )}
+
+          <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 space-y-2">
+            <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Before connecting</p>
+            <p className="text-xs text-slate-500">
+              On developer.ebay.com → User Tokens → your RuName, set <b>Your auth accepted URL</b> to exactly:
+            </p>
+            <div className="flex items-center gap-2">
+              <code className="flex-1 min-w-0 truncate text-xs font-mono bg-white border border-slate-200 rounded-lg px-2.5 py-2 text-slate-700">{callbackUrl}</code>
+              <button type="button" onClick={copyCallback}
+                className="text-xs font-bold px-3 py-2 rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-100">
+                {copied ? 'Copied' : 'Copy'}
+              </button>
+            </div>
+            <p className="text-xs text-slate-400">
+              Use your Production App ID, Cert ID and RuName together — they must all come from the same keyset.
+              {isLocal && <> <b className="text-amber-600">eBay only sends people back to https sites, so connect from your live site, not localhost.</b></>}
+            </p>
           </div>
 
           <div className="flex gap-3">

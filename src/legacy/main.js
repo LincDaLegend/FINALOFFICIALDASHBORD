@@ -1,5 +1,6 @@
 import { state, persistTransactions, persistBudgets } from './utils/state.js';
 import { addToWatchlist, removeFromWatchlist, markSynced, getWatchedIds, WATCHLIST_EVENT } from './utils/watchlist.js';
+import { startEbayConnect } from './utils/ebayConnect.js';
 import { buildModel, loadModel, trainOnDeals, saveModel } from './utils/tfModel.js';
 import { buildEmbeddingModel } from './utils/embedding.js';
 import { renderSearch, doSearch } from './components/Search.js';
@@ -562,12 +563,11 @@ window.connectEbayAccount = () => {
     window.renderApp();
     return;
   }
-  const params = new URLSearchParams({
-    app_id:        state.ebayKey,
-    client_secret: state.ebaySecret,
-    ru_name:       state.ebayRuName,
-  });
-  window.location.href = `/api/ebay/auth?${params}`;
+  startEbayConnect({ appId: state.ebayKey, clientSecret: state.ebaySecret, ruName: state.ebayRuName })
+    .catch(e => {
+      state.notify = { type: 'err', msg: `eBay connect failed: ${e.message}` };
+      window.renderApp();
+    });
 };
 window.disconnectEbayUser = () => {
   state.ebayUser = null;
