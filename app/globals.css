@@ -12,6 +12,18 @@ button {
   border-color: transparent;
 }
 
+/* Tailwind's transform utilities (translate-x-*, etc.) need these defaults, which normally
+   come from the preflight we skip. Without them the phone sidebar never slides away. */
+*, ::before, ::after {
+  --tw-translate-x: 0;
+  --tw-translate-y: 0;
+  --tw-rotate: 0;
+  --tw-skew-x: 0;
+  --tw-skew-y: 0;
+  --tw-scale-x: 1;
+  --tw-scale-y: 1;
+}
+
 /* Strip legacy app's own sidebar / topbar / mobile-nav so the search
    content renders inline inside the business layout like a normal tab. */
 #app .sidebar,

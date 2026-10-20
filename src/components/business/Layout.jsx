@@ -1,10 +1,11 @@
 import { useState } from 'react';
-import { Menu, X, Box, Settings, Search, Heart } from 'lucide-react';
+import { Menu, X, Box, Settings, Search, Heart, PlayCircle } from 'lucide-react';
 
 export default function Layout({ children, activeTab, setActiveTab }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const navItems = [
+    { id: 'demo',         label: 'Demo · Start Here',  icon: PlayCircle },
     { id: 'search',       label: 'Search eBay',        icon: Search },
     { id: 'watchlist',    label: 'Watchlist',           icon: Heart },
     { id: 'settings',     label: 'Settings & Data',     icon: Settings },

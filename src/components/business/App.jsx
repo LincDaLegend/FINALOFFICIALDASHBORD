@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import Layout from './Layout.jsx';
 import Watchlist from './Watchlist.jsx';
+import Demo from './Demo.jsx';
 import BusinessSettings from './BusinessSettings.jsx';
 import { useBusinessStore } from './store.js';
 
@@ -17,7 +18,11 @@ function bootLegacy() {
 }
 
 export default function BusinessApp() {
-  const [activeTab, setActiveTab] = useState('search');
+  // First visit opens the step-by-step Demo; after that, straight to Search
+  const [activeTab, setActiveTab] = useState(() => {
+    try { return localStorage.getItem('demoSeen') ? 'search' : 'demo'; } catch { return 'search'; }
+  });
+  useEffect(() => { try { localStorage.setItem('demoSeen', '1'); } catch {} }, []);
   const [data, update] = useBusinessStore();
 
   // Boot legacy app on first Search visit; sync settings each time
@@ -38,6 +43,7 @@ export default function BusinessApp() {
 
   const renderTab = () => {
     switch (activeTab) {
+      case 'demo':         return <Demo setActiveTab={setActiveTab} />;
       case 'watchlist':    return <Watchlist phpRate={data.phpRate} setActiveTab={setActiveTab} />;
       case 'settings':     return <BusinessSettings data={data} update={update} />;
       case 'search':       return null;

@@ -156,7 +156,7 @@ export default function Watchlist({ phpRate = 57.2, setActiveTab }) {
                         href={ebayItemUrl(item)}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-200 text-sm font-bold text-slate-600 no-underline hover:bg-slate-50"
+                        className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-solid border-slate-200 text-sm font-bold text-slate-600 no-underline hover:bg-slate-50"
                       >
                         View <ExternalLink className="w-3.5 h-3.5" />
                       </a>
@@ -164,7 +164,7 @@ export default function Watchlist({ phpRate = 57.2, setActiveTab }) {
                         onClick={() => removeFromWatchlist(item.itemId)}
                         title="Remove from watchlist (stays on your eBay watchlist)"
                         aria-label={`Remove ${item.title || 'item'} from watchlist`}
-                        className="flex items-center px-3 py-2 rounded-lg border border-slate-200 text-slate-400 hover:text-red-500 hover:border-red-200 hover:bg-red-50"
+                        className="flex items-center px-3 py-2 rounded-lg border border-solid border-slate-200 text-slate-400 hover:text-red-500 hover:border-red-200 hover:bg-red-50"
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>
