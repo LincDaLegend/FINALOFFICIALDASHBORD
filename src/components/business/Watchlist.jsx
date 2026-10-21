@@ -135,7 +135,6 @@ export default function Watchlist({ phpRate = 57.2, setActiveTab }) {
                         {left && <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${leftCls}`}>⏱ {left.label}</span>}
                         {item.grade && item.grade !== 'raw' && <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-blue-50 text-blue-600">{item.grade}</span>}
                         {item.aiScore != null && <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">Deal score {item.aiScore}</span>}
-                        {item.syncedToEbay && <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700">On eBay watchlist</span>}
                       </div>
                       <p className="font-semibold text-slate-900 text-sm leading-snug line-clamp-2 break-words">
                         {item.title || `eBay item ${String(item.itemId).split('|')[1] || item.itemId}`}
@@ -162,7 +161,7 @@ export default function Watchlist({ phpRate = 57.2, setActiveTab }) {
                       </a>
                       <button
                         onClick={() => removeFromWatchlist(item.itemId)}
-                        title="Remove from watchlist (stays on your eBay watchlist)"
+                        title="Remove from watchlist"
                         aria-label={`Remove ${item.title || 'item'} from watchlist`}
                         className="flex items-center px-3 py-2 rounded-lg border border-solid border-slate-200 text-slate-400 hover:text-red-500 hover:border-red-200 hover:bg-red-50"
                       >

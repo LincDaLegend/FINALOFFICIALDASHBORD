@@ -1,9 +1,10 @@
 # Baller — eBay card search
 
-A Next.js app for finding trading-card deals on eBay. It has three pages:
+A Next.js app for finding trading-card deals on eBay. It has four pages:
 
+- **Demo · Start Here** — a short step-by-step checklist for first-time users, plus sample cards to practise on.
 - **Search eBay** — live eBay listings, each with a deal score that compares the price against recent sold prices.
-- **Watchlist** — every item you tap **♡ Watchlist** on. If your eBay account is connected, the item is also added to your eBay watchlist.
+- **Watchlist** — every item you tap **♡ Watchlist** on, saved in this browser.
 - **Settings & Data** — API keys, the exchange rate, and data backup.
 
 ## Run it locally
@@ -26,8 +27,6 @@ Every key can be set in **either** of two places:
 | `EBAY_APP_ID` | Search (required) | [developer.ebay.com/my/keys](https://developer.ebay.com/my/keys) → Production → **App ID (Client ID)** |
 | `EBAY_CLIENT_SECRET` | Search (required) | Same page → **Cert ID (Client Secret)** |
 | `RAPIDAPI_KEY` | Sold prices (recommended) | See [Sold prices](#sold-prices-rapidapi) below |
-| `EBAY_REDIRECT_URI` | Connecting your eBay account (optional) | Your **RuName**, from developer.ebay.com → User Tokens → *Get a Token from eBay via Your Application* |
-| `NEXT_PUBLIC_APP_URL` | Connecting your eBay account (optional) | Your site's public URL, e.g. `https://your-app.vercel.app`. Defaults to the current site. |
 | `ANTHROPIC_API_KEY` | Optional AI helpers | [console.anthropic.com](https://console.anthropic.com/) |
 
 Search fails with *"eBay App ID and Client Secret are both required"* until both eBay keys are set.

@@ -1,5 +1,5 @@
 import { state, persistTransactions, persistBudgets } from './utils/state.js';
-import { addToWatchlist, removeFromWatchlist, markSynced, getWatchedIds, WATCHLIST_EVENT } from './utils/watchlist.js';
+import { addToWatchlist, removeFromWatchlist, getWatchedIds, WATCHLIST_EVENT } from './utils/watchlist.js';
 import { startEbayConnect } from './utils/ebayConnect.js';
 import { buildModel, loadModel, trainOnDeals, saveModel } from './utils/tfModel.js';
 import { buildEmbeddingModel } from './utils/embedding.js';
@@ -481,13 +481,12 @@ window.resetAllConfig     = resetAllConfig;
 window.setMLWeight        = setMLWeight;
 
 // Only the id is passed from the button — titles can contain quotes that break inline onclick handlers.
-window.toggleWatch = async (itemId) => {
+window.toggleWatch = (itemId) => {
   const listing = (state.results || []).find(r => r.itemId === itemId) || { itemId };
   const title   = listing.title || 'item';
   const already = getWatchedIds().includes(itemId);
 
   if (already) {
-    // Removed locally only (eBay has no removeFromWatchlist API)
     removeFromWatchlist(itemId);
     state.watchlist = getWatchedIds();
     state.notify = { type: 'ok', msg: `Removed from watchlist: ${title}` };
@@ -495,31 +494,9 @@ window.toggleWatch = async (itemId) => {
     return;
   }
 
-  // Add locally first so UI responds immediately
   addToWatchlist(listing);
   state.watchlist = getWatchedIds();
-  window.renderApp();
-
-  // Sync to eBay if user token is available
-  if (state.ebayToken) {
-    try {
-      const resp = await fetch('/api/ebay/watchlist', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ itemId, userToken: state.ebayToken, appId: state.ebayKey }),
-      });
-      const data = await resp.json().catch(() => ({}));
-      if (!resp.ok) {
-        throw new Error(data.error || `eBay error ${resp.status}`);
-      }
-      markSynced(itemId);
-      state.notify = { type: 'ok', msg: `♥ Added to your watchlist and your eBay watchlist: ${title}` };
-    } catch (err) {
-      state.notify = { type: 'err', msg: `Added to your watchlist — eBay sync failed: ${err.message}` };
-    }
-  } else {
-    state.notify = { type: 'ok', msg: `♥ Added to your watchlist. Connect eBay in Settings to also sync it to eBay.` };
-  }
+  state.notify = { type: 'ok', msg: `♥ Added to your watchlist: ${title}` };
   window.renderApp();
 };
 

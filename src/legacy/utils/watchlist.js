@@ -41,7 +41,6 @@ export function addToWatchlist(listing) {
     aiScore:      Number.isFinite(listing.aiScore) ? listing.aiScore : null,
     marketValue:  listing.marketValue ?? null,
     addedAt:      new Date().toISOString(),
-    syncedToEbay: false,
   });
   persist(items);
 }
@@ -53,10 +52,6 @@ export function setWatchlist(items) {
 
 export function removeFromWatchlist(itemId) {
   persist(getWatchlist().filter(i => i.itemId !== itemId));
-}
-
-export function markSynced(itemId) {
-  persist(getWatchlist().map(i => (i.itemId === itemId ? { ...i, syncedToEbay: true } : i)));
 }
 
 /** Browse API ids look like "v1|123456789|0"; the eBay item page uses the middle number. */
