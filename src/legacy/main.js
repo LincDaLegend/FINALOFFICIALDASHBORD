@@ -3,7 +3,7 @@ import { addToWatchlist, removeFromWatchlist, getWatchedIds, WATCHLIST_EVENT } f
 import { startEbayConnect } from './utils/ebayConnect.js';
 import { buildModel, loadModel, trainOnDeals, saveModel } from './utils/tfModel.js';
 import { buildEmbeddingModel } from './utils/embedding.js';
-import { renderSearch, doSearch } from './components/Search.js';
+import { renderSearch, doSearch, RESULTS_BATCH } from './components/Search.js';
 import { renderRules, setRulesTab, updateCatROI, addPlayer, removePlayer, addSetToTier, removeSetFromTier, resetAllConfig, setMLWeight } from './components/Rules.js';
 import {
   renderSettings, saveEbayKey, clearEbayKey,
@@ -206,13 +206,19 @@ window.expenseSearch = (val) => {
   window.renderApp();
 };
 
+window.showMoreResults = () => {
+  state.showCount = (state.showCount || RESULTS_BATCH) + RESULTS_BATCH;
+  window.renderApp();
+};
 window.setVerdictFilter = (v) => {
   state.verdictFilter = state.verdictFilter === v ? '' : v;
+  state.showCount = RESULTS_BATCH;
   renderApp();
 };
 
 window.setSearchSort = (v) => {
   state.searchSort = v;
+  state.showCount = RESULTS_BATCH;
   renderApp();
 };
 

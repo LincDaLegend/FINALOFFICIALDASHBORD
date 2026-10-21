@@ -3,6 +3,8 @@ import { searchEbay, fetchSoldMarketValue, computeMarketFromListings, ruleMLScor
 import { extractFeatures, topFeatures } from '../utils/ml.js';
 import { CAT_BADGE_CLASS, CAT_LABEL, DEFAULT_RULES, DEFAULT_PLAYER_CATEGORIES, SAMPLE_DEALS } from '../utils/constants.js';
 
+export const RESULTS_BATCH = 40;
+
 export function renderSearch() {
   const margin = state.targetMarginPct ?? 30;
   const ship   = state.estShippingPhp  ?? 100;
@@ -138,7 +140,11 @@ function renderResults() {
   const margin = state.targetMarginPct ?? 30;
   const ship   = state.estShippingPhp  ?? 100;
 
-  return sorted.map(r => {
+  // Drawing thousands of cards at once makes the page crawl — show them in batches
+  const limit = state.showCount || RESULTS_BATCH;
+  const more  = sorted.length - limit;
+
+  return sorted.slice(0, limit).map(r => {
     const score   = r.aiScore || 0;
     const verdict = scoreVerdict(score).label;
     const vCls    = verdict === 'buy now' ? 'badge-buy' : verdict === 'consider' ? 'badge-consider' : 'badge-skip';
@@ -242,7 +248,12 @@ function renderResults() {
         </div>
       </div>
     `;
-  }).join('');
+  }).join('') + (more > 0 ? `
+    <div style="text-align:center;margin:18px 0 8px">
+      <button class="pill" style="padding:10px 22px;font-size:14px;font-weight:600" onclick="window.showMoreResults()">
+        Show ${Math.min(more, RESULTS_BATCH)} more <span style="color:var(--text-muted);font-weight:400">(${more} left)</span>
+      </button>
+    </div>` : '');
 }
 
 function renderEmptySearch() {
@@ -268,6 +279,7 @@ export async function doSearch() {
   state.loading       = true;
   state.results       = [];
   state.verdictFilter = '';
+  state.showCount     = RESULTS_BATCH;
   window.renderApp();
 
   try {

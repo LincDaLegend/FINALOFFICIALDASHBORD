@@ -99,7 +99,10 @@ export async function GET(req) {
     );
   }
 
-  const maxItems = parseInt(searchParams.get('max') || '0', 10);
+  // eBay can match thousands of listings. Fetching them all meant dozens of back-to-back
+  // requests (a minute or more), so take the top best-match results only.
+  const DEFAULT_MAX = 400;
+  const maxItems = Math.min(parseInt(searchParams.get('max') || '', 10) || DEFAULT_MAX, 1000);
   const PAGE_SIZE = 200;
   const ebayHeaders = {
     'Authorization': `Bearer ${accessToken}`,
@@ -107,45 +110,40 @@ export async function GET(req) {
     'Content-Type': 'application/json',
   };
 
-  const allItems = [];
-  let offset = 0;
-  let total = null;
+  const filters = [];
+  if (listingType === 'fixed')   filters.push('buyingOptions:{FIXED_PRICE}');
+  if (listingType === 'auction') filters.push('buyingOptions:{AUCTION}');
+  if (itemLocation === 'us')     filters.push('itemLocationCountry:US');
 
-  do {
-    const filters = [];
-    if (listingType === 'fixed')   filters.push('buyingOptions:{FIXED_PRICE}');
-    if (listingType === 'auction') filters.push('buyingOptions:{AUCTION}');
-    if (itemLocation === 'us')     filters.push('itemLocationCountry:US');
-
+  const fetchPage = async (offset, limit) => {
     const browseParams = new URLSearchParams({
       q: keywords,
-      limit: String(maxItems > 0 ? Math.min(PAGE_SIZE, maxItems) : PAGE_SIZE),
+      limit: String(limit),
       offset: String(offset),
       sort: 'bestMatch',
       category_ids: '212',
     });
     if (filters.length) browseParams.set('filter', filters.join(','));
-
     const resp = await fetch(
       `https://api.ebay.com/buy/browse/v1/item_summary/search?${browseParams.toString()}`,
       { headers: ebayHeaders, cache: 'no-store' }
     );
+    if (!resp.ok) return { error: `eBay Browse API error (${resp.status}): ${(await resp.text()).slice(0, 200)}` };
+    return resp.json();
+  };
 
-    if (!resp.ok) {
-      const text = await resp.text();
-      return NextResponse.json(
-        { error: `eBay Browse API error (${resp.status}): ${text.slice(0, 200)}` },
-        { status: 502 }
-      );
-    }
+  // First page tells us how many there are; any further pages are fetched at the same time
+  const first = await fetchPage(0, Math.min(PAGE_SIZE, maxItems));
+  if (first.error) return NextResponse.json({ error: first.error }, { status: 502 });
 
-    const data = await resp.json();
-    const page = data?.itemSummaries || [];
-    allItems.push(...page);
-
-    if (total === null) total = data?.total ?? 0;
-    offset += PAGE_SIZE;
-  } while (offset < total && allItems.length < total && (maxItems === 0 || allItems.length < maxItems));
+  const allItems = [...(first.itemSummaries || [])];
+  const wanted = Math.min(first.total ?? 0, maxItems);
+  const offsets = [];
+  for (let o = PAGE_SIZE; o < wanted; o += PAGE_SIZE) offsets.push(o);
+  const rest = await Promise.all(offsets.map(o => fetchPage(o, Math.min(PAGE_SIZE, wanted - o))));
+  for (const page of rest) {
+    if (!page.error) allItems.push(...(page.itemSummaries || [])); // a failed extra page just means fewer results
+  }
 
   const items = allItems;
 
