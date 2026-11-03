@@ -1,11 +1,11 @@
 # Baller — eBay card search
 
-A Next.js app for finding trading-card deals on eBay. It has four pages:
+A Next.js app for finding basketball-card deals on eBay, designed after Apple's interface guidelines (system font, light/dark, translucent bars, spring motion). It has four pages:
 
-- **Demo · Start Here** — a short step-by-step checklist for first-time users, plus sample cards to practise on.
-- **Search eBay** — live eBay listings, each with a deal score that compares the price against recent sold prices.
-- **Watchlist** — every item you tap **♡ Watchlist** on, saved in this browser.
-- **Settings & Data** — API keys, the exchange rate, and data backup.
+- **Get Started** — three setup steps that tick themselves off, how to read a result, and sample cards to practise on.
+- **Find Cards** — live eBay listings ranked best deal first. Each shows Buy / Consider / Skip and the price in pesos; tap one for what to sell it for, your profit, and how it compares with recent sold prices.
+- **Watchlist** — every card you tap the heart on, saved in this browser. Swipe left (or use the trash button) to delete, with Undo.
+- **Settings** — eBay and RapidAPI keys, your pricing (profit goal, shipping, exchange rate), and backup/restore.
 
 ## Run it locally
 
@@ -20,7 +20,7 @@ npm run dev                  # http://localhost:3000  (or: npx next dev -p 3001)
 Every key can be set in **either** of two places:
 
 - **On the server**, in `.env.local` locally or in Vercel's environment variables. This is the better option: anyone using the deployment gets working search without typing keys.
-- **In the app**, under **Settings & Data**. Those keys are stored in that browser only and override the server's.
+- **In the app**, under **Settings**. Those keys are stored in that browser only and override the server's.
 
 | Variable | Needed for | Where to get it |
 |---|---|---|
@@ -41,7 +41,7 @@ Deal scores are much more accurate when they can compare a listing against what 
 4. Put the key in one of these places:
    - **Locally:** add `RAPIDAPI_KEY=your-key` to `.env.local` and restart `npm run dev`.
    - **On Vercel:** Project → Settings → Environment Variables → add `RAPIDAPI_KEY`, then redeploy.
-   - **In the app:** Settings & Data → **Sold Prices (RapidAPI)** → paste → **Save Key**.
+   - **In the app:** Settings → **Sold Prices** → paste the key (it saves when you leave the field).
 
 If no key is set anywhere, search still works, but each listing is only compared with the other live listings.
 
@@ -55,4 +55,4 @@ The request goes through the app's own `/api/ebay/sold` route, so the key is nev
 
 ## Where data lives
 
-The watchlist, settings and older business records are stored in the browser's localStorage, so they're per browser and per device. Use **Settings & Data → Export Data** to back them up, and **Import Data** to move them to another browser.
+The watchlist, settings and older business records are stored in the browser's localStorage, so they're per browser and per device. Use **Settings → Download Backup** to back them up, and **Restore from Backup** to move them to another browser.

@@ -1,180 +1,171 @@
-import { useState, useEffect, useMemo } from 'react';
-import { Heart, ExternalLink, Trash2, Clock, CheckCircle, Search, ImageOff } from 'lucide-react';
-import { getWatchlist, removeFromWatchlist, ebayItemUrl, WATCHLIST_EVENT } from '../../legacy/utils/watchlist.js';
-import { fmt } from './store.js';
+'use client';
 
-function timeLeft(endTime, now) {
-  if (!endTime) return null;
-  const ms = new Date(endTime) - now;
-  if (isNaN(ms)) return null;
-  if (ms <= 0) return { label: 'Ended', ms };
-  const h = Math.floor(ms / 3600000);
-  const m = Math.floor((ms % 3600000) / 60000);
-  if (h >= 24) return { label: `${Math.floor(h / 24)}d ${h % 24}h left`, ms };
-  if (h >= 1)  return { label: `${h}h ${m}m left`, ms };
-  return { label: `${Math.max(1, m)}m left`, ms };
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { motion, AnimatePresence, useMotionValue, animate, useReducedMotion } from 'motion/react';
+import { Heart, Trash2, Timer, Search } from 'lucide-react';
+import { ebayItemUrl } from '../../legacy/utils/watchlist.js';
+import { useWatchlist } from './watchlistHooks.js';
+import { useSettings, pricing } from './stores.js';
+import { Page, Group, Segmented, Chip, Button, EmptyState, useToast } from './ui.jsx';
+import { Thumb, peso, timeLeft } from './FindCards.jsx';
+
+const ACTION_W = 88;
+
+// Where a flick would come to rest — Apple's scroll-deceleration projection
+const project = (velocity, rate = 0.998) => (velocity / 1000) * rate / (1 - rate);
+
+/** Swipe left to reveal Delete. Tracks the finger 1:1, rubber-bands at the edge,
+ *  and uses release velocity to decide open vs closed. */
+function SwipeRow({ onDelete, label, children }) {
+  const x = useMotionValue(0);
+  const dragged = useRef(false);
+  const [open, setOpen] = useState(false);
+  const reduce = useReducedMotion();
+
+  const settle = (to, velocity = 0) => {
+    setOpen(to !== 0);
+    animate(x, to, reduce ? { duration: 0 } : { type: 'spring', bounce: 0.15, duration: 0.35, velocity });
+  };
+
+  return (
+    <div className="relative overflow-hidden">
+      <button type="button" onClick={onDelete} tabIndex={open ? 0 : -1} aria-hidden={!open}
+        className="absolute inset-y-0 right-0 flex items-center justify-center bg-red text-white text-subhead font-semibold"
+        style={{ width: ACTION_W }}>
+        Delete
+      </button>
+      <motion.div
+        drag="x"
+        dragDirectionLock
+        dragConstraints={{ left: -ACTION_W, right: 0 }}
+        dragElastic={{ left: 0.2, right: 0.05 }}
+        dragMomentum={false}
+        style={{ x, touchAction: 'pan-y' }}
+        onDragStart={() => { dragged.current = true; }}
+        onDragEnd={(_, info) => {
+          const projected = x.get() + project(info.velocity.x);
+          settle(projected < -ACTION_W / 2 ? -ACTION_W : 0, info.velocity.x);
+          setTimeout(() => { dragged.current = false; }, 0);
+        }}
+        // A drag, or a tap while open, shouldn't also open the link
+        onClickCapture={(e) => {
+          if (dragged.current || open) { e.preventDefault(); e.stopPropagation(); if (open) settle(0); }
+        }}
+        className="relative bg-surface"
+        aria-label={label}
+      >
+        {children}
+      </motion.div>
+    </div>
+  );
 }
 
-function fmtAdded(iso) {
-  if (!iso) return 'Added earlier';
-  const d = new Date(iso);
-  return isNaN(d) ? '' : `Added ${d.toLocaleDateString('en-PH', { month: 'short', day: 'numeric', year: 'numeric' })}`;
-}
+export default function Watchlist({ setActiveTab }) {
+  const { items, remove, restore } = useWatchlist();
+  const settings = useSettings();
+  const toast = useToast();
+  const [sort, setSort] = useState('added');
+  const [now, setNow] = useState(() => Date.now());
 
-function Thumb({ src }) {
-  const [broken, setBroken] = useState(false);
-  if (!src || broken) {
-    return (
-      <div className="w-20 h-24 shrink-0 rounded-xl bg-slate-100 flex items-center justify-center text-slate-300">
-        <ImageOff className="w-6 h-6" />
-      </div>
-    );
-  }
-  return <img src={src} alt="" loading="lazy" onError={() => setBroken(true)} className="w-20 h-24 shrink-0 rounded-xl bg-slate-100 object-contain" />;
-}
-
-export default function Watchlist({ phpRate = 57.2, setActiveTab }) {
-  const [items, setItems] = useState(getWatchlist);
-  const [sort, setSort]   = useState('added');
-  const [now, setNow]     = useState(() => Date.now());
-
-  // Stay in sync with hearts clicked on the Search tab (and other open tabs)
   useEffect(() => {
-    const refresh = () => setItems(getWatchlist());
-    const onStorage = (e) => { if (e.key === 'watchlistItems' || e.key === 'watchlist') refresh(); };
-    window.addEventListener(WATCHLIST_EVENT, refresh);
-    window.addEventListener('storage', onStorage);
-    const t = setInterval(() => setNow(Date.now()), 30000);
-    return () => {
-      window.removeEventListener(WATCHLIST_EVENT, refresh);
-      window.removeEventListener('storage', onStorage);
-      clearInterval(t);
-    };
+    const t = setInterval(() => setNow(Date.now()), 30000); // keep auction countdowns fresh
+    return () => clearInterval(t);
   }, []);
-
-  const total = (i) => (i.price || 0) + (i.shippingCost || 0);
 
   const sorted = useMemo(() => {
     const ends = (i) => (i.endTime ? new Date(i.endTime).getTime() : Infinity);
-    return [...items].sort((a, b) => {
-      if (sort === 'ending')    return ends(a) - ends(b);
-      if (sort === 'price_asc') return total(a) - total(b);
-      return (b.addedAt || '').localeCompare(a.addedAt || '');
-    });
+    const total = (i) => (i.price || 0) + (i.shippingCost || 0);
+    return [...items].sort((a, b) =>
+      sort === 'ending' ? ends(a) - ends(b)
+        : sort === 'price' ? total(a) - total(b)
+        : (b.addedAt || '').localeCompare(a.addedAt || ''));
   }, [items, sort]);
 
-  const auctions = items.filter(i => i.buyingOption === 'AUCTION' && timeLeft(i.endTime, now)?.label !== 'Ended').length;
-  const totalUsd = items.reduce((s, i) => s + total(i), 0);
+  const live = items.filter(i => i.buyingOption === 'AUCTION' && (timeLeft(i.endTime, now)?.ms ?? 0) > 0).length;
+  const totalPhp = items.reduce((s, i) => s + (i.title ? pricing(i, settings).costPhp : 0), 0);
+
+  const del = (item) => {
+    const before = items;
+    remove(item.itemId);
+    toast('Removed', <Trash2 className="w-4 h-4 text-label-2" aria-hidden />, { label: 'Undo', onClick: () => restore(before) });
+  };
+
+  if (items.length === 0) {
+    return (
+      <Page title="Watchlist">
+        <EmptyState icon={<Heart className="w-6 h-6" aria-hidden />} title="Nothing saved yet"
+          action={<Button onClick={() => setActiveTab('search')}><Search className="w-4 h-4" aria-hidden /> Find Cards</Button>}>
+          Tap the heart on any card in Find Cards to keep an eye on it here.
+        </EmptyState>
+      </Page>
+    );
+  }
 
   return (
-    <div className="space-y-6">
-      {/* Stats */}
-      <div className="grid grid-cols-3 gap-4">
-        {[
-          { label: 'Watching', value: items.length, color: 'text-slate-700', Icon: Heart },
-          { label: 'Live Auctions', value: auctions, color: 'text-amber-600', Icon: Clock },
-          { label: 'Total Value', value: fmt(totalUsd * phpRate), color: 'text-emerald-600', Icon: CheckCircle },
-        ].map(({ label, value, color, Icon }) => (
-          <div key={label} className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
-            <div className="flex items-center justify-between mb-3">
-              <span className="text-xs text-slate-400 font-bold uppercase tracking-wider">{label}</span>
-              <Icon className="w-4 h-4 text-slate-300" />
+    <Page title="Watchlist" subtitle="Prices are from when you saved each card.">
+      <Group>
+        <div className="grid grid-cols-3 divide-x divide-[var(--separator)] py-3">
+          {[
+            ['Cards', items.length],
+            ['Live auctions', live],
+            ['Total cost', peso(totalPhp)],
+          ].map(([label, value]) => (
+            <div key={label} className="text-center px-2">
+              <div className="text-title-2 tabular">{value}</div>
+              <div className="text-caption text-label-2">{label}</div>
             </div>
-            <div className={`text-2xl sm:text-3xl font-bold tracking-tight ${color}`}>{value}</div>
-          </div>
-        ))}
-      </div>
-
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-        <div className="px-5 py-4 border-b border-slate-100 flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 className="text-base font-bold text-slate-900">Watchlist</h2>
-            <p className="text-xs text-slate-400 mt-0.5">Every item you’ve watched from Search eBay. Prices are from when you added them.</p>
-          </div>
-          {items.length > 1 && (
-            <select
-              value={sort}
-              onChange={e => setSort(e.target.value)}
-              className="w-auto text-sm font-semibold text-slate-600 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2"
-            >
-              <option value="added">Newest first</option>
-              <option value="ending">Ending soonest</option>
-              <option value="price_asc">Cheapest first</option>
-            </select>
-          )}
+          ))}
         </div>
+      </Group>
 
-        {sorted.length === 0 ? (
-          <div className="px-6 py-16 text-center">
-            <Heart className="w-10 h-10 text-slate-200 mx-auto" />
-            <p className="mt-3 font-bold text-slate-700">No watched items yet</p>
-            <p className="mt-1 text-sm text-slate-400">Tap <b>♡ Watchlist</b> on any search result and it’ll show up here.</p>
-            {setActiveTab && (
-              <button
-                onClick={() => setActiveTab('search')}
-                className="mt-5 inline-flex items-center gap-2 bg-slate-800 text-white px-4 py-2.5 rounded-xl font-bold text-sm hover:bg-slate-700 transition-colors"
-              >
-                <Search className="w-4 h-4" /> Search eBay
-              </button>
-            )}
-          </div>
-        ) : (
-          <ul className="divide-y divide-slate-100">
+      <section>
+        <div className="pb-2.5">
+          <Segmented size="sm" label="Sort" value={sort} onChange={setSort}
+            options={[{ value: 'added', label: 'Newest' }, { value: 'ending', label: 'Ending soon' }, { value: 'price', label: 'Lowest price' }]} />
+        </div>
+        <div className="bg-surface rounded-group overflow-hidden group-list" style={{ '--inset': '76px' }}>
+          <AnimatePresence initial={false}>
             {sorted.map(item => {
               const left = item.buyingOption === 'AUCTION' ? timeLeft(item.endTime, now) : null;
-              const leftCls = !left || left.label === 'Ended'
-                ? 'bg-slate-100 text-slate-500'
-                : left.ms < 3600000 ? 'bg-red-50 text-red-600' : 'bg-amber-50 text-amber-700';
-              const usd = total(item);
+              const p = item.title ? pricing(item, settings) : null;
+              const added = item.addedAt ? new Date(item.addedAt).toLocaleDateString('en-PH', { month: 'short', day: 'numeric' }) : null;
               return (
-                <li key={item.itemId} className="p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center gap-4">
-                  <div className="flex gap-4 min-w-0 flex-1">
-                    <Thumb src={item.imgUrl} />
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap gap-1.5 mb-1.5">
-                        {left && <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${leftCls}`}>⏱ {left.label}</span>}
-                        {item.grade && item.grade !== 'raw' && <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-blue-50 text-blue-600">{item.grade}</span>}
-                        {item.aiScore != null && <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">Deal score {item.aiScore}</span>}
-                      </div>
-                      <p className="font-semibold text-slate-900 text-sm leading-snug line-clamp-2 break-words">
-                        {item.title || `eBay item ${String(item.itemId).split('|')[1] || item.itemId}`}
-                      </p>
-                      <p className="text-xs text-slate-400 mt-1">{fmtAdded(item.addedAt)}</p>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center justify-between sm:justify-end gap-4">
-                    {item.title ? (
-                      <div className="sm:text-right">
-                        <div className="text-lg font-bold text-slate-900">${usd.toFixed(2)}</div>
-                        <div className="text-xs text-slate-400">≈ {fmt(usd * phpRate)}{item.shippingCost > 0 ? ' incl. ship' : ''}</div>
-                      </div>
-                    ) : <div className="text-xs text-slate-400">Details not saved</div>}
-                    <div className="flex gap-2">
-                      <a
-                        href={ebayItemUrl(item)}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-solid border-slate-200 text-sm font-bold text-slate-600 no-underline hover:bg-slate-50"
-                      >
-                        View <ExternalLink className="w-3.5 h-3.5" />
+                <motion.div key={item.itemId} layout="position" exit={{ opacity: 0, height: 0 }} transition={{ type: 'spring', bounce: 0, duration: 0.3 }}>
+                  <SwipeRow onDelete={() => del(item)} label={item.title || 'Saved card'}>
+                    <div className="flex items-center">
+                      <a href={ebayItemUrl(item)} target="_blank" rel="noopener noreferrer" draggable={false}
+                        className="flex-1 min-w-0 flex items-center gap-3 pl-4 pr-2 py-3 row-press">
+                        <Thumb src={item.imgUrl} size="sm" />
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-subhead font-medium leading-snug line-clamp-2">
+                            {item.title || `eBay item ${String(item.itemId).split('|')[1] || item.itemId}`}
+                          </span>
+                          <span className="flex flex-wrap items-center gap-1.5 mt-1">
+                            {left && <Chip tone={left.ms > 0 && left.ms < 3600000 ? 'red' : 'gray'}><Timer className="w-3 h-3" aria-hidden />{left.label}</Chip>}
+                            {added && <span className="text-caption text-label-2">Saved {added}</span>}
+                          </span>
+                        </span>
+                        {p && (
+                          <span className="shrink-0 text-right">
+                            <span className="block text-headline tabular">{peso(p.costPhp)}</span>
+                            <span className="block text-caption text-label-2 tabular">${p.usd.toFixed(2)}</span>
+                          </span>
+                        )}
                       </a>
-                      <button
-                        onClick={() => removeFromWatchlist(item.itemId)}
-                        title="Remove from watchlist"
-                        aria-label={`Remove ${item.title || 'item'} from watchlist`}
-                        className="flex items-center px-3 py-2 rounded-lg border border-solid border-slate-200 text-slate-400 hover:text-red-500 hover:border-red-200 hover:bg-red-50"
-                      >
-                        <Trash2 className="w-4 h-4" />
+                      {/* Mouse users: a visible delete button, since swiping isn't obvious with a pointer */}
+                      <button type="button" onClick={() => del(item)} aria-label={`Delete ${item.title || 'card'}`}
+                        className="hidden [@media(hover:hover)]:flex w-11 h-11 mr-2 items-center justify-center rounded-full text-label-3 hover:text-red-ink hover:bg-red-soft pressable">
+                        <Trash2 className="w-[18px] h-[18px]" aria-hidden />
                       </button>
                     </div>
-                  </div>
-                </li>
+                  </SwipeRow>
+                </motion.div>
               );
             })}
-          </ul>
-        )}
-      </div>
-    </div>
+          </AnimatePresence>
+        </div>
+        <p className="text-footnote text-label-2 px-4 pt-1.5">Tap a card to open it on eBay. Swipe left to delete.</p>
+      </section>
+    </Page>
   );
 }

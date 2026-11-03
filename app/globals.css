@@ -1,45 +1,183 @@
-/* Legacy app styles */
-@import "../src/legacy/styles/main.css";
-
-/* Tailwind v3 — utilities only, no preflight so legacy styles stay intact */
+@tailwind base;
+@tailwind components;
 @tailwind utilities;
 
-/* Without Tailwind's preflight, browsers apply a grey ButtonFace background
-   to <button> elements. Reset it so our explicit bg-* classes take over. */
-button {
-  background-color: transparent;
-  background-image: none;
-  border-color: transparent;
+/* ── Apple system colors ─────────────────────────────────────────────────────
+   Light values first, dark below. "-ink" variants are the darker shades Apple
+   uses for colored text so it stays readable on white. */
+:root {
+  color-scheme: light dark;
+
+  --bg:         #F2F2F7;                  /* systemGroupedBackground */
+  --surface:    #FFFFFF;                  /* secondarySystemGroupedBackground */
+  --surface-2:  #F2F2F7;
+  --label:      #000000;
+  --label-2:    rgba(60, 60, 67, 0.76);   /* a touch darker than Apple's 0.6 so small text passes 4.5:1 */
+  --label-3:    rgba(60, 60, 67, 0.34);
+  --separator:  rgba(60, 60, 67, 0.22);
+  --fill:       rgba(120, 120, 128, 0.12);
+  --fill-2:     rgba(120, 120, 128, 0.2);
+
+  --tint:       #007AFF;
+  --tint-ink:   #0060DF;
+  --tint-soft:  rgba(0, 122, 255, 0.12);
+  --green:      #34C759;
+  --green-ink:  #1E7B34;
+  --green-soft: rgba(52, 199, 89, 0.15);
+  --orange:     #FF9500;
+  --orange-ink: #B25000;
+  --orange-soft: rgba(255, 149, 0, 0.15);
+  --red:        #FF3B30;
+  --red-ink:    #D70015;
+  --red-soft:   rgba(255, 59, 48, 0.12);
+
+  /* Materials: translucent bars that content scrolls under */
+  --bar:        rgba(249, 249, 249, 0.78);
+  --bar-edge:   rgba(0, 0, 0, 0.12);
+  --sidebar:    rgba(236, 236, 241, 0.86);
+  --scrim:      rgba(0, 0, 0, 0.3);
+  --shadow-lg:  0 10px 40px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.06);
 }
 
-/* Tailwind's transform utilities (translate-x-*, etc.) need these defaults, which normally
-   come from the preflight we skip. Without them the phone sidebar never slides away. */
-*, ::before, ::after {
-  --tw-translate-x: 0;
-  --tw-translate-y: 0;
-  --tw-rotate: 0;
-  --tw-skew-x: 0;
-  --tw-skew-y: 0;
-  --tw-scale-x: 1;
-  --tw-scale-y: 1;
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg:         #000000;
+    --surface:    #1C1C1E;
+    --surface-2:  #2C2C2E;
+    --label:      #FFFFFF;
+    --label-2:    rgba(235, 235, 245, 0.64);
+    --label-3:    rgba(235, 235, 245, 0.32);
+    --separator:  rgba(84, 84, 88, 0.6);
+    --fill:       rgba(118, 118, 128, 0.24);
+    --fill-2:     rgba(118, 118, 128, 0.34);
+
+    --tint:       #0A84FF;
+    --tint-ink:   #4DA2FF;
+    --tint-soft:  rgba(10, 132, 255, 0.2);
+    --green:      #30D158;
+    --green-ink:  #30D158;
+    --green-soft: rgba(48, 209, 88, 0.18);
+    --orange:     #FF9F0A;
+    --orange-ink: #FFB340;
+    --orange-soft: rgba(255, 159, 10, 0.18);
+    --red:        #FF453A;
+    --red-ink:    #FF6961;
+    --red-soft:   rgba(255, 69, 58, 0.18);
+
+    --bar:        rgba(22, 22, 24, 0.78);
+    --bar-edge:   rgba(255, 255, 255, 0.12);
+    --sidebar:    rgba(28, 28, 30, 0.9);
+    --scrim:      rgba(0, 0, 0, 0.55);
+    --shadow-lg:  0 10px 40px rgba(0, 0, 0, 0.5);
+  }
 }
 
-/* Strip legacy app's own sidebar / topbar / mobile-nav so the search
-   content renders inline inside the business layout like a normal tab. */
-#app .sidebar,
-#app .top-bar,
-#app .mobile-nav {
-  display: none !important;
-}
-#app .app-body {
-  display: block !important;
-}
-#app .main-area {
-  padding: 0 !important;
-  min-height: unset !important;
-}
-#app .main-content {
-  padding: 0 !important;
-  max-width: none !important;
+/* ── Base ─────────────────────────────────────────────────────────────────── */
+html {
+  background: var(--bg);
+  -webkit-text-size-adjust: 100%;
 }
 
+body {
+  background: var(--bg);
+  color: var(--label);
+  font-size: 1rem;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-optical-sizing: auto;
+}
+
+/* Phones: no grey tap flash, no 300ms tap delay, no long-press text selection on controls */
+button, a, [role='button'], summary {
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+button, [role='button'] {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* 16px+ inputs stop iOS Safari zooming the page on focus */
+input, select, textarea { font-size: max(16px, 1em); }
+
+/* Text fields draw their own focus ring */
+:focus-visible:not(input):not(textarea):not(select) {
+  outline: 3px solid var(--tint);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+
+::selection { background: var(--tint-soft); }
+
+input[type='search']::-webkit-search-cancel-button { -webkit-appearance: none; }
+input[type='number']::-webkit-inner-spin-button,
+input[type='number']::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+input[type='number'] { -moz-appearance: textfield; }
+
+@layer components {
+  /* Translucent material for bars that float over scrolling content */
+  .material-bar {
+    background: var(--bar);
+    -webkit-backdrop-filter: saturate(180%) blur(20px);
+    backdrop-filter: saturate(180%) blur(20px);
+  }
+  .material-sidebar {
+    background: var(--sidebar);
+    -webkit-backdrop-filter: saturate(160%) blur(30px);
+    backdrop-filter: saturate(160%) blur(30px);
+  }
+
+  /* Instant press feedback — lives on pointer-down, not release */
+  .pressable {
+    transition: transform 120ms ease-out, background-color 120ms ease-out, opacity 120ms ease-out;
+  }
+  .pressable:active { transform: scale(0.97); }
+  .row-press:active { background-color: var(--fill); }
+
+  /* Type scale — tracking tightens as size grows, leading loosens as it shrinks */
+  .text-large-title { font-size: 2.125rem; line-height: 1.12; font-weight: 700; letter-spacing: -0.022em; }
+  .text-title-2     { font-size: 1.375rem; line-height: 1.2;  font-weight: 700; letter-spacing: -0.016em; }
+  .text-headline    { font-size: 1.0625rem; line-height: 1.3; font-weight: 600; letter-spacing: -0.01em; }
+  .text-body        { font-size: 1.0625rem; line-height: 1.4; letter-spacing: -0.005em; }
+  .text-callout     { font-size: 1rem;     line-height: 1.38; }
+  .text-subhead     { font-size: 0.9375rem; line-height: 1.35; }
+  .text-footnote    { font-size: 0.8125rem; line-height: 1.38; letter-spacing: 0.002em; }
+  .text-caption     { font-size: 0.75rem;  line-height: 1.33; letter-spacing: 0.01em; }
+
+  .tabular { font-variant-numeric: tabular-nums; }
+
+  /* Grouped list: hairline dividers inset from the left, like iOS (rows can set --inset) */
+  .group-list > * { position: relative; }
+  .group-list > * + *::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: var(--inset, 16px);
+    right: 0;
+    height: 0.5px;
+    background: var(--separator);
+    pointer-events: none;
+  }
+}
+
+/* ── Accessibility preferences ────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .pressable:active { transform: none; }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .material-bar     { background: var(--surface); -webkit-backdrop-filter: none; backdrop-filter: none; }
+  .material-sidebar { background: var(--surface-2); -webkit-backdrop-filter: none; backdrop-filter: none; }
+}
+
+@media (prefers-contrast: more) {
+  :root { --separator: rgba(60, 60, 67, 0.6); --label-2: rgba(60, 60, 67, 0.85); }
+  .material-bar, .material-sidebar { background: var(--surface); -webkit-backdrop-filter: none; backdrop-filter: none; }
+}
