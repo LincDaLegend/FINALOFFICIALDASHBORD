@@ -1,9 +1,8 @@
 'use client';
 
-import { Sparkles, Search, Heart, Settings } from 'lucide-react';
+import { Search, Heart, Settings } from 'lucide-react';
 
 export const TABS = [
-  { id: 'start',     label: 'Get Started', icon: Sparkles },
   { id: 'search',    label: 'Find Cards',  icon: Search },
   { id: 'watchlist', label: 'Watchlist',   icon: Heart },
   { id: 'settings',  label: 'Settings',    icon: Settings },
@@ -50,7 +49,7 @@ export default function Layout({ activeTab, setActiveTab, watchCount, children }
 
       {/* Tab bar — phone / small tablet */}
       <nav aria-label="Main"
-        className="lg:hidden fixed inset-x-0 bottom-0 z-30 material-bar shadow-[0_-0.5px_0_var(--bar-edge)] grid grid-cols-4"
+        className="lg:hidden fixed inset-x-0 bottom-0 z-30 material-bar shadow-[0_-0.5px_0_var(--bar-edge)] grid grid-cols-3"
         style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
         {TABS.map(({ id, label, icon: Icon }) => {
           const on = activeTab === id;

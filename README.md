@@ -1,9 +1,8 @@
 # Baller — eBay card search
 
-A Next.js app for finding basketball-card deals on eBay, designed after Apple's interface guidelines (system font, light/dark, translucent bars, spring motion). It has four pages:
+A Next.js app for finding basketball-card deals on eBay, designed after Apple's interface guidelines (system font, light/dark, translucent bars, spring motion). It has three pages:
 
-- **Get Started** — three setup steps that tick themselves off, how to read a result, and sample cards to practise on.
-- **Find Cards** — live eBay listings ranked best deal first. Each shows Buy / Consider / Skip and the price in pesos; tap one for what to sell it for, your profit, and how it compares with recent sold prices.
+- **Find Cards** — live eBay listings ranked best deal first (no keys yet? try the sample cards). Each shows Buy / Consider / Skip and the price in pesos; tap one for what to sell it for, your profit, and how it compares with recent sold prices.
 - **Watchlist** — every card you tap the heart on, saved in this browser. Swipe left (or use the trash button) to delete, with Undo.
 - **Settings** — eBay and RapidAPI keys, your pricing (profit goal, shipping, exchange rate), and backup/restore.
 
