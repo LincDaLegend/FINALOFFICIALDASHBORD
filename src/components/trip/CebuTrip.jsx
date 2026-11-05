@@ -85,15 +85,17 @@ export default function CebuTrip() {
       setTrip(t => ({
         ...t,
         hotels: [...(t.hotels || []), hotel],
-        days: night == null ? t.days : t.days.map((d, i) => (i === night ? { ...d, hotel: hotel.uid } : d)),
+        days: night == null ? t.days : t.days.map((d, i) => (i === night ? { ...d, hotel: hotel.uid, pin: true } : d)),
       }));
       return hotel.uid;
     },
     updateHotel(id, patch) { setTrip(t => ({ ...t, hotels: t.hotels.map(h => (h.uid === id ? { ...h, ...patch } : h)) })); },
     removeHotel(id) {
-      setTrip(t => ({ ...t, hotels: t.hotels.filter(h => h.uid !== id), days: t.days.map(d => (d.hotel === id ? { ...d, hotel: null } : d)) }));
+      setTrip(t => ({ ...t, hotels: t.hotels.filter(h => h.uid !== id), days: t.days.map(d => (d.hotel === id ? { ...d, hotel: null, pin: false } : d)) }));
     },
-    setNight(i, id) { setTrip(t => ({ ...t, days: t.days.map((d, k) => (k === i ? { ...d, hotel: id } : d)) })); },
+    /** Picking a hotel by hand pins that night, so Cheapest / Lowest cost / AI keep it. */
+    setNight(i, id) { setTrip(t => ({ ...t, days: t.days.map((d, k) => (k === i ? { ...d, hotel: id, pin: !!id } : d)) })); },
+    togglePin(i) { setTrip(t => ({ ...t, days: t.days.map((d, k) => (k === i && d.hotel ? { ...d, pin: !d.pin } : d)) })); },
   };
 
   const go = (s) => { setStep(s); window.scrollTo({ top: 0, behavior: reduce ? 'auto' : 'smooth' }); };

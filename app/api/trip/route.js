@@ -344,6 +344,28 @@ function shortestRoute({ dayInfo, stops, M, metric, scope, dayIndex, extra = [],
  * re-ordered inside each day, and stops may move between days. The cost is only gas + hotels;
  * a rearrangement is kept only if it is cheaper AND doesn't make the days run later than before.
  */
+/**
+ * The hotels an optimizer may choose from, from the request: priced ones, plus any unpriced one you
+ * starred or already put on a night (those keep their spot; others with no price are left out).
+ * `fixed[night]` = the option index for nights you pinned.
+ */
+function hotelOptions(body, days) {
+  const str = (v, n = 120) => String(v ?? '').slice(0, n);
+  const price = (h) => (Number.isFinite(+h.nightly) ? Math.max(0, +h.nightly) : 0);
+  const nights = days.slice(0, Math.max(0, days.length - 1));
+  const onNight = new Set(nights.map(d => d?.hotel).filter(Boolean));
+  const sent = (Array.isArray(body.hotels) ? body.hotels : []).filter(h => Number.isFinite(+h.lat) && Number.isFinite(+h.lon) && h.lat !== null && h.lon !== null);
+  const keep = (h) => price(h) > 0 || h.must || onNight.has(h.uid);
+  const cands = sent.filter(keep).slice(0, 12)
+    .map(h => ({ uid: str(h.uid, 40), name: str(h.name), area: str(h.area), lat: +h.lat, lon: +h.lon, nightly: price(h), must: !!h.must }));
+  // While choosing, a hotel with no price counts as your priciest one, so it's never picked for looking free
+  const guess = Math.max(0, ...cands.map(c => c.nightly)) || 3000;
+  cands.forEach(c => { c.weigh = c.nightly || guess; });
+  const idx = new Map(cands.map((c, k) => [c.uid, k]));
+  const fixed = nights.map(d => (d?.pin && idx.has(d.hotel) ? idx.get(d.hotel) : null));
+  return { cands, fixed, idx, unpriced: sent.filter(h => !keep(h)).map(h => str(h.name)) };
+}
+
 function minCost(args) {
   const res = solveCost(args);
   if (args.hotelsOnly) return res;
@@ -352,8 +374,13 @@ function minCost(args) {
   return res.raw.total > keep.raw.total + 0.5 || res.raw.late > keep.raw.late + 0.5 ? keep : res;
 }
 
-function solveCost({ stops, slots, cands, M, gasPerKm, backBy, hotelsOnly }) {
+function solveCost({ stops, slots, cands, M, gasPerKm, backBy, hotelsOnly, fixed = [] }) {
   const n = stops.length, D = slots.length, H = cands.length;
+  // Pinned nights keep their hotel; must-stay hotels get used at least once (up to 4 of them)
+  const mustIdx = cands.map((c, h) => (c.must ? h : -1)).filter(h => h >= 0).slice(0, 4);
+  const bit = (h) => { const k = mustIdx.indexOf(h); return k < 0 ? 0 : 1 << k; };
+  const pop = (m) => { let c = 0; for (; m; m &= m - 1) c++; return c; };
+  const allowed = (night) => (fixed[night] != null ? [fixed[night]] : cands.map((_, h) => h));
   const pinFirst = slots[0].ids[0] ?? null;
   const lastIds = slots[D - 1].ids;
   const pinLast = lastIds.length && lastIds[lastIds.length - 1] !== pinFirst ? lastIds[lastIds.length - 1] : null;
@@ -392,25 +419,27 @@ function solveCost({ stops, slots, cands, M, gasPerKm, backBy, hotelsOnly }) {
       let total = 0;
       arr.forEach(sl => { total += dayPrice(route(sl.ids, null, null)); });
       const hotels = Array(Math.max(0, D - 1)).fill(null);
-      return { total, hotels, late: lateOf(arr, hotels) };
+      return { total, hotels, late: lateOf(arr, hotels), cover: 0 };
     }
-    let f = cands.map((c, h) => ({ cost: dayPrice(route(arr[0].ids, null, n + h)) + c.nightly, path: [h] }));
+    // State per night: (hotel tonight, which must-stay hotels used so far) → cheapest way there
+    const put = (m, h, mask, cost, path) => { const k = h * 16 + mask; const o = m.get(k); if (!o || cost < o.cost) m.set(k, { h, mask, cost, path }); };
+    let f = new Map();
+    for (const h of allowed(0)) put(f, h, bit(h), dayPrice(route(arr[0].ids, null, n + h)) + (cands[h].weigh ?? cands[h].nightly), [h]);
     for (let i = 1; i < D - 1; i++) {
-      f = cands.map((c, h) => {
-        let best = null;
-        f.forEach((prev, hp) => {
-          const v = prev.cost + dayPrice(route(arr[i].ids, n + hp, n + h)) + c.nightly;
-          if (!best || v < best.cost) best = { cost: v, path: [...prev.path, h] };
-        });
-        return best;
-      });
+      const g = new Map();
+      for (const prev of f.values()) {
+        for (const h of allowed(i)) put(g, h, prev.mask | bit(h), prev.cost + dayPrice(route(arr[i].ids, n + prev.h, n + h)) + (cands[h].weigh ?? cands[h].nightly), [...prev.path, h]);
+      }
+      f = g;
     }
+    // Use as many must-stays as possible first, then cheapest
     let best = null;
-    f.forEach((prev, hp) => {
-      const v = prev.cost + dayPrice(route(arr[D - 1].ids, n + hp, null));
-      if (!best || v < best.cost) best = { cost: v, path: prev.path };
-    });
-    return { total: best.cost, hotels: best.path, late: lateOf(arr, best.path) };
+    for (const prev of f.values()) {
+      const v = prev.cost + dayPrice(route(arr[D - 1].ids, n + prev.h, null));
+      const cover = pop(prev.mask);
+      if (!best || cover > best.cover || (cover === best.cover && v < best.cost)) best = { cost: v, path: prev.path, cover };
+    }
+    return { total: best.cost, hotels: best.path, late: lateOf(arr, best.path), cover: best.cover };
   };
   // Minutes past the day's hours, summed over the trip, for an arrangement + hotel choice
   function lateOf(arr, hotels) {
@@ -536,8 +565,19 @@ const CATS = ['water', 'beach', 'dive', 'worship', 'landmark', 'view', 'food', '
 
 // Only the plan comes back: no summaries, reasons or tips
 const PLAN_SCHEMA = {
-  type: 'object', additionalProperties: false, required: ['days'],
+  type: 'object', additionalProperties: false, required: ['days', 'nights'],
   properties: {
+    nights: {
+      type: 'array',
+      description: 'The hotel for each night, night 1 = after day 1.',
+      items: {
+        type: 'object', additionalProperties: false, required: ['night', 'hotel'],
+        properties: {
+          night: { type: 'integer', description: 'Night number, 1-based.' },
+          hotel: { type: 'string', description: 'Hotel id (H1, H2, ...), or "" when there are no hotel options.' },
+        },
+      },
+    },
     days: {
       type: 'array',
       items: {
@@ -567,13 +607,14 @@ const PLAN_SCHEMA = {
   },
 };
 
-const ORGANIZE_SYSTEM = `You organise a traveller's wishlist for a road trip around Cebu province, Philippines, into days. You receive the wishlist (S ids, must-dos marked), the day each item is on now (if any), the fixed hotel for each night (H ids), a driving matrix (minutes / km) between all of them, and the traveller's own notes on how they want to travel. Return the complete day-by-day itinerary.
+const ORGANIZE_SYSTEM = `You organise a traveller's wishlist for a road trip around Cebu province, Philippines, into days. You receive the wishlist (S ids, must-dos marked), the day each item is on now (if any), the hotel options (H ids, price per night for the whole group, must-stays marked), which nights are fixed to a hotel, a driving matrix (minutes / km) between all of them, and the traveller's own notes on how they want to travel. Return the complete day-by-day itinerary and the hotel for each night.
 
 You decide which wishlist places to include, which day each goes on, their order, each day's leave time, and how long to spend at each.
 - Follow the traveller's notes closely: they are your criteria and constraints (pace, hours, driving limits, must-dos, timing wishes). Where the notes don't say, plan a balanced trip: leave from 07:00, back by 21:00, under about 4 hours of driving a day.
 - Include every must-do unless it truly cannot fit. Include other wishlist places when they fit; leave the rest out (they stay on the wishlist).
 - Only add places that are not on the wishlist (ref "") when the notes ask for it, for example "add a lunch spot each day". Then add only real, well-known places in Cebu province you are confident exist, with their official name, town, category and coordinates.
-- Hotels are fixed. Day N starts at the previous night's hotel and ends at that night's hotel; day 1 starts at its first stop and the last day ends at its last stop.
+- Hotels: pick one hotel (H id) for every night; a night comes after each day except the last. Keep every fixed night as given. Use each MUST-STAY hotel for at least one night. Otherwise choose hotels that keep the whole trip cheap (nightly price plus driving to and from them) and sit well for the next day's places, unless the notes say otherwise. Use "" only when there are no hotel options.
+- Day N starts at the previous night's hotel and ends at that night's hotel; day 1 starts at its first stop and the last day ends at its last stop.
 - Take drive times between listed places from the matrix.
 - Plan around opening hours, morning-only activities, sunrise and sunset viewpoints, and midday heat.
 - Each place appears at most once. "start" is HH:MM, 24-hour; "mins" is 15 to 480. Return every day, numbered from 1.`;
@@ -723,11 +764,7 @@ export async function POST(req) {
   // ── Lowest cost: gas + one hotel per night (no AI) ──
   if (body.mode === 'cost') {
     if (!n) return NextResponse.json({ error: 'Add some places first.' }, { status: 400 });
-    const sent = Array.isArray(body.hotels) ? body.hotels : [];
-    const cands = sent.slice(0, 12)
-      .filter(h => num(h.lat) != null && num(h.lon) != null)
-      .map(h => ({ uid: str(h.uid, 40), name: str(h.name), lat: +h.lat, lon: +h.lon, nightly: Math.max(0, num(h.nightly) || 0) }))
-      .filter(h => h.nightly > 0); // a hotel with no price isn't free: leave it out until it has one
+    const { cands, fixed, unpriced } = hotelOptions(body, days);
     const fuel = body.fuel || {};
     const gasPerKm = (num(fuel.pricePerL) || 65) / Math.max(1, num(fuel.kmPerL) || 10);
     const Mc = await driveMatrix([...stops, ...cands]);
@@ -742,7 +779,8 @@ export async function POST(req) {
       for (let k = 1; k < seq.length; k++) { bKm += Mc.km[seq[k - 1]]?.[seq[k]] || 0; bMin += Mc.min[seq[k - 1]]?.[seq[k]] || 0; }
     });
     curHotels.forEach(h => { if (h != null) bStay += cands[h].nightly; });
-    const res = minCost({ stops, slots, cands, M: Mc, gasPerKm, backBy: backByMin, hotelsOnly: !!body.hotelsOnly });
+    const res = minCost({ stops, slots, cands, M: Mc, gasPerKm, backBy: backByMin, hotelsOnly: !!body.hotelsOnly, fixed });
+    const usedH = new Set(res.hotels);
     return NextResponse.json({
       days: res.days.map(d => ({ title: '', start: d.start, stops: d.ids.map(k => ({ uid: stops[k].uid, mins: stops[k].mins })) })),
       // No priced hotels → don't touch the nights at all
@@ -750,7 +788,9 @@ export async function POST(req) {
       unscheduled: extra.map(k => stops[k].uid),
       before: { km: Math.round(bKm), min: Math.round(bMin), gas: Math.round(bKm * gasPerKm), stay: Math.round(bStay), total: Math.round(bKm * gasPerKm + bStay) },
       after: res.totals, metric: 'cost', noHotels: cands.length === 0, approx: Mc.approx,
-      unpriced: sent.filter(h => !(num(h.nightly) > 0)).map(h => str(h.name)),
+      unpriced,
+      noPrice: cands.filter((c, h) => !c.nightly && usedH.has(h)).map(c => c.name),
+      mustMissed: cands.filter((c, h) => c.must && !usedH.has(h)).map(c => c.name),
     });
   }
 
@@ -806,18 +846,29 @@ Already on the wishlist: ${stops.map(s => `${s.name} (${s.area || 'Cebu'})`).joi
   if (!apiKey) return NextResponse.json({ code: 'no_key', error: 'Add your Claude API key to use AI planning.' }, { status: 401 });
   if (!n) return NextResponse.json({ error: 'Add places to your wishlist first.' }, { status: 400 });
 
+  // Hotel options the AI may choose from (same rules as Lowest cost), and nights you pinned
+  const opt = hotelOptions(body, days);
+  const H = opt.cands, NN = Math.max(0, dayInfo.length - 1);
+  const pointsAI = [...stops, ...H];
+  const MA = await driveMatrix(pointsAI);
+  const fuel = body.fuel || {};
+  const gasPerKm = (num(fuel.pricePerL) || 65) / Math.max(1, num(fuel.kmPerL) || 10);
+  const nowNight = days.slice(0, NN).map(d => (opt.idx.has(d.hotel) ? opt.idx.get(d.hotel) : null));
+
   const notes = str(prefs.note, 1500).trim();
+  const peso = (v) => '₱' + Math.round(v).toLocaleString('en-PH');
   const wishText = stops.map((s, k) => `${label(k, n)} ${s.name} (${s.area || 'Cebu'}), about ${s.mins} min${s.must ? ', MUST-DO' : ''}${onDay.has(k) ? `, now on day ${onDay.get(k) + 1}` : ''}`).join('\n');
-  const dayText = dayInfo.map((d, i) => `Day ${i + 1} (${d.date})${i > 0 && dayInfo[i - 1].hotel != null ? `: starts from ${label(n + dayInfo[i - 1].hotel, n)}` : ''}${d.hotel != null && i < dayInfo.length - 1 ? `, night at ${label(n + d.hotel, n)}` : ''}`).join('\n');
-  const hotelText = hotels.map((h, k) => `${label(n + k, n)} ${h.name} (${h.area || 'Cebu'})`).join('\n') || '(no hotels chosen yet)';
-  const matrixText = points.length > 1
-    ? `Driving matrix${M.approx ? ' (straight-line estimates)' : ''}, row = from, columns in order ${points.map((_, k) => label(k, n)).join(' ')}:\n`
-      + points.map((_, a) => `${label(a, n)}: ` + points.map((__, b) => (a === b ? '-' : `${Math.round(M.min[a][b] ?? 0)}m/${Math.round(M.km[a][b] ?? 0)}km`)).join(' ')).join('\n')
+  const dayText = dayInfo.map((d, i) => `Day ${i + 1} (${d.date})`).join('\n');
+  const hotelText = H.map((h, k) => `${label(n + k, n)} ${h.name} (${h.area || 'Cebu'}), ${h.nightly ? `${peso(h.nightly)}/night` : 'price unknown'}${h.must ? ', MUST-STAY' : ''}`).join('\n') || '(no hotel options)';
+  const nightText = Array.from({ length: NN }, (_, i) => `Night ${i + 1} (after day ${i + 1}): ${opt.fixed[i] != null ? `${label(n + opt.fixed[i], n)} (fixed)` : `choose${nowNight[i] != null ? ` (now ${label(n + nowNight[i], n)})` : ''}`}`).join('\n');
+  const matrixText = pointsAI.length > 1
+    ? `Driving matrix${MA.approx ? ' (straight-line estimates)' : ''}, row = from, columns in order ${pointsAI.map((_, k) => label(k, n)).join(' ')}:\n`
+      + pointsAI.map((_, a) => `${label(a, n)}: ` + pointsAI.map((__, b) => (a === b ? '-' : `${Math.round(MA.min[a][b] ?? 0)}m/${Math.round(MA.km[a][b] ?? 0)}km`)).join(' ')).join('\n')
     : '';
   const prompt = `Traveller's notes:
 ${notes ? `---\n${notes}\n---` : '(none: plan a balanced trip)'}
 
-Group: ${Math.max(1, Math.round(num(body.people) || 2))} people.
+Group: ${Math.max(1, Math.round(num(body.people) || 2))} people. Gas costs about ${peso(gasPerKm)} per km.
 
 Wishlist:
 ${wishText}
@@ -825,8 +876,11 @@ ${wishText}
 Days:
 ${dayText}
 
-Hotels:
+Hotel options (price per night for the whole group):
 ${hotelText}
+
+Nights:
+${nightText || '(one-day trip: no nights)'}
 
 ${matrixText}`;
 
@@ -863,14 +917,43 @@ ${matrixText}`;
   const pinned = new Set(await pinNew(fresh, stops.map(s => ({ lat: s.lat, lon: s.lon }))).then(list => list.map(x => { Object.assign(fresh.find(f => f.name === x.name), x, { ok: true }); return x.name; })));
   out.forEach(d => { d.stops = d.stops.filter(s => !s.isNew || pinned.has(s.name)).map(({ slot, ok, ...s }) => s); });
 
-  const finalStops = out.flatMap(d => d.stops.map(s => (s.isNew ? s : stops[s.k])));
-  const M2 = await driveMatrix([...finalStops, ...hotels]);
+  // The AI's hotel picks; pinned nights always win, anything missing or invalid gets filled cheapest
+  const aiNight = Array(NN).fill(null);
+  for (const x of r.data.nights || []) {
+    const i = Math.round(x.night) - 1;
+    const m = /^H(\d+)$/.exec(String(x.hotel || '').trim());
+    if (i >= 0 && i < NN && m && +m[1] >= 1 && +m[1] <= H.length) aiNight[i] = +m[1] - 1;
+  }
+  const finalStops = out.flatMap(d => d.stops.map(s => (s.isNew ? { ...s, mins: s.mins } : { ...stops[s.k], mins: s.mins })));
+  const M2 = await driveMatrix([...finalStops, ...H]);
   let c = 0;
-  const after = totals(withHotels(out.map(d => d.stops.map(() => c++)), finalStops.length), M2);
+  const slotsAI = out.map(d => ({ ids: d.stops.map(() => c++), start: d.start }));
+  const solveH = (fixed) => solveCost({ stops: finalStops, slots: slotsAI, cands: H, M: M2, gasPerKm, backBy, hotelsOnly: true, fixed });
+  let plan = solveH(aiNight.map((h, i) => opt.fixed[i] ?? h));
+  const musts = H.filter(h => h.must).length;
+  const covered = (p) => new Set(p.hotels.filter(h => h != null && H[h].must)).size;
+  if (covered(plan) < Math.min(musts, NN)) plan = solveH(opt.fixed); // AI skipped a must-stay → cheapest plan that includes it
+
+  // Before = today's plan (your order, your nights); after = the AI's plan with its hotels
+  const costOf = (dayIds, nights, M, nStops, list) => {
+    let km = 0, min = 0, stay = 0;
+    dayIds.forEach((ids, i) => {
+      const seq = [...(i > 0 && nights[i - 1] != null ? [nStops + nights[i - 1]] : []), ...ids, ...(i < NN && nights[i] != null ? [nStops + nights[i]] : [])];
+      for (let k = 1; k < seq.length; k++) { km += M.km[seq[k - 1]]?.[seq[k]] ?? 0; min += M.min[seq[k - 1]]?.[seq[k]] ?? 0; }
+    });
+    nights.forEach(h => { if (h != null) stay += list[h].nightly; });
+    return { km: Math.round(km), min: Math.round(min), gas: Math.round(km * gasPerKm), stay: Math.round(stay), total: Math.round(km * gasPerKm + stay) };
+  };
+  const was = costOf(dayInfo.map(d => d.ids), nowNight, MA, n, H);
+  const usedH = new Set(plan.hotels);
 
   return NextResponse.json({
     days: out.map(d => ({ title: d.title, start: d.start, stops: d.stops.map(({ k, ...s }) => s) })),
+    hotels: H.length ? plan.hotels.map(h => (h == null ? null : H[h].uid)) : undefined,
     unscheduled: stops.filter((_, k) => !used.has(k)).map(s => s.uid),
-    before, after, approx: M.approx || M2.approx,
+    before: was, after: plan.totals, metric: 'cost', approx: MA.approx || M2.approx,
+    unpriced: opt.unpriced,
+    noPrice: H.filter((h, k) => !h.nightly && usedH.has(k)).map(h => h.name),
+    mustMissed: H.filter((h, k) => h.must && !usedH.has(k)).map(h => h.name),
   });
 }

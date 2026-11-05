@@ -4,7 +4,7 @@
 import { useEffect, useState } from 'react';
 import {
   X, Plus, Check, Minus, BedDouble, MapPin, Droplets, TreePalm, Church, Landmark, Mountain, Utensils, ShoppingBag,
-  Plane, Trees, Fish, Users, Star, CircleAlert, ArrowRight, Loader2,
+  Plane, Trees, Fish, Users, Star, CircleAlert, ArrowRight, Loader2, Lock, LockOpen,
 } from 'lucide-react';
 import { Button, Chip } from '../business/ui.jsx';
 import { updateSettings } from '../business/stores.js';
@@ -94,11 +94,11 @@ export function PlaceCard({ p, added, onAdd, addedLabel = 'On your wishlist' }) 
   );
 }
 
-export function MustStar({ on, onToggle, name, size = 'md' }) {
+export function MustStar({ on, onToggle, name, size = 'md', word = 'must-do' }) {
   const box = size === 'sm' ? 'w-7 h-7' : 'w-9 h-9';
   return (
-    <button type="button" onClick={onToggle} aria-pressed={on} aria-label={on ? `${name} is a must-do` : `Mark ${name} as a must-do`}
-      title={on ? 'Must-do' : 'Mark as must-do'}
+    <button type="button" onClick={onToggle} aria-pressed={on} aria-label={on ? `${name} is a ${word}` : `Mark ${name} as a ${word}`}
+      title={on ? `${word[0].toUpperCase()}${word.slice(1)}` : `Mark as ${word}`}
       className={`${box} rounded-full flex items-center justify-center pressable shrink-0 ${on ? 'text-orange' : 'text-label-3 hover:text-orange'}`}>
       <Star className={size === 'sm' ? 'w-4 h-4' : 'w-5 h-5'} fill={on ? 'currentColor' : 'none'} strokeWidth={2} aria-hidden />
     </button>
@@ -134,13 +134,14 @@ export const tripPayload = (trip) => ({
   people: trip.guests,
   prefs: trip.prefs,
   fuel: trip.fuel,
-  hotels: (trip.hotels || []).map(h => ({ uid: h.uid, name: h.name, area: h.area, lat: h.lat, lon: h.lon, nightly: nightlyFor(h) })),
+  hotels: (trip.hotels || []).map(h => ({ uid: h.uid, name: h.name, area: h.area, lat: h.lat, lon: h.lon, nightly: nightlyFor(h), must: !!h.must })),
   places: trip.pool.map(({ uid, name, area, lat, lon, mins, must }) => ({ uid, name, area, lat, lon, mins, must })),
   days: trip.days.map((d, i) => ({
     date: fmtDay(addDays(trip.startDate, i), { weekday: 'long', month: 'short', day: 'numeric' }),
     start: d.start,
     order: d.stops,
     hotel: i < DAYS - 1 ? d.hotel : null,
+    pin: i < DAYS - 1 && !!d.hotel && !!d.pin,
     stay: (() => { const h = i < DAYS - 1 ? stayOf(trip, i) : null; return h ? { name: h.name, area: h.area, lat: h.lat, lon: h.lon } : null; })(),
   })),
 });
@@ -212,6 +213,7 @@ export function PlanPreview({ res, trip, onApply, onBack, stale }) {
               {res.before.total > res.after.total && <span className="text-callout font-semibold text-label-2 ml-2 line-through">{peso(res.before.total)}</span>}
             </p>
             {res.before.total > res.after.total && <p className="text-subhead font-semibold text-green-ink">Save {peso(res.before.total - res.after.total)}</p>}
+            {res.after.total > res.before.total && res.before.total > 0 && <p className="text-subhead font-semibold text-orange-ink">{peso(res.after.total - res.before.total)} more than now</p>}
           </div>
           <div>
             <p className="text-footnote font-medium text-label-2">Hotels</p>
@@ -221,9 +223,9 @@ export function PlanPreview({ res, trip, onApply, onBack, stale }) {
             <p className="text-footnote font-medium text-label-2">Gas · {res.after.km} km</p>
             <p className="text-title-2 tabular">{peso(res.after.gas)}</p>
           </div>
-          {res.unpriced?.length > 0 && (
-            <p className="basis-full text-subhead text-orange-ink">No price, left out: {res.unpriced.join(', ')}</p>
-          )}
+          {res.unpriced?.length > 0 && <p className="basis-full text-subhead text-orange-ink">No price, left out: {res.unpriced.join(', ')}</p>}
+          {res.noPrice?.length > 0 && <p className="basis-full text-subhead text-orange-ink">No price yet, counted as ₱0: {res.noPrice.join(', ')}</p>}
+          {res.mustMissed?.length > 0 && <p className="basis-full text-subhead text-orange-ink">Not enough nights for: {res.mustMissed.join(', ')}</p>}
         </div>
       ) : (
         <div className="flex flex-wrap items-end gap-x-8 gap-y-3">
@@ -273,7 +275,8 @@ export function PlanPreview({ res, trip, onApply, onBack, stale }) {
             {res.hotels && i < DAYS - 1 && (
               <p className="mt-2 pt-2 shadow-[inset_0_0.5px_0_var(--separator)] text-subhead flex items-center gap-1.5 min-w-0">
                 <BedDouble className="w-4 h-4 text-[#5856D6] shrink-0" aria-hidden />
-                <span className="truncate">{hotelName(res.hotels[i]) || 'No hotel'}</span>
+                <span className="truncate flex-1">{hotelName(res.hotels[i]) || 'No hotel'}</span>
+                {trip.days[i].pin && trip.days[i].hotel === res.hotels[i] && <Lock className="w-3.5 h-3.5 text-label-2 shrink-0" aria-label="Pinned" />}
               </p>
             )}
           </li>
@@ -304,7 +307,8 @@ export function applyPlan(t, res, asPlace) {
   const byId = Object.fromEntries(pool.map(p => [p.uid, p]));
   const days = t.days.map((d, i) => ({
     ...d,
-    ...(res.hotels ? { hotel: i < t.days.length - 1 ? res.hotels[i] ?? null : null } : {}),
+    // A pinned night stays pinned only if the plan kept its hotel (the server never changes pinned nights)
+    ...(res.hotels ? (() => { const h = i < t.days.length - 1 ? res.hotels[i] ?? null : null; return { hotel: h, pin: !!d.pin && d.hotel === h }; })() : {}),
     start: res.days[i]?.start || d.start,
     stops: (res.days[i]?.stops || []).map(x => {
       if (x.isNew) { const np = asPlace(x); pool.push(np); return np.uid; }
@@ -316,7 +320,7 @@ export function applyPlan(t, res, asPlace) {
   return { ...t, pool, days };
 }
 
-export const planSig = (trip) => JSON.stringify([trip.pool.map(p => [p.uid, p.mins, p.must]), trip.days.map(d => [d.start, d.stops, d.hotel]), (trip.hotels || []).map(h => [h.uid, h.price, h.unit, h.sleeps]), trip.prefs, trip.guests, trip.fuel]);
+export const planSig = (trip) => JSON.stringify([trip.pool.map(p => [p.uid, p.mins, p.must]), trip.days.map(d => [d.start, d.stops, d.hotel, !!d.pin]), (trip.hotels || []).map(h => [h.uid, h.price, h.lat, h.lon, !!h.must]), trip.prefs, trip.guests, trip.fuel]);
 
 export function NextButton({ children, onClick }) {
   return (
@@ -347,6 +351,18 @@ export function PriceCell({ value, onCommit, label }) {
   );
 }
 
+/** Pinned night = the optimizers (Cheapest, Lowest cost, AI) keep its hotel. Hotels you place by hand start pinned. */
+export function PinButton({ on, onToggle, night, size = 'md' }) {
+  const box = size === 'sm' ? 'w-7 h-7' : 'w-9 h-9';
+  return (
+    <button type="button" onClick={onToggle} aria-pressed={on} aria-label={on ? `Unpin night ${night}` : `Pin night ${night}`}
+      title={on ? 'Pinned: optimizers keep this hotel' : 'Not pinned: optimizers may change it'}
+      className={`${box} rounded-full flex items-center justify-center pressable shrink-0 ${on ? 'text-[#5856D6]' : 'text-label-3 hover:text-label-2'}`}>
+      {on ? <Lock className="w-4 h-4" strokeWidth={2.4} aria-hidden /> : <LockOpen className="w-4 h-4" aria-hidden />}
+    </button>
+  );
+}
+
 export function HotelRow({ h, ops, sub }) {
   return (
     <li className="flex items-center gap-3 pl-4 pr-2 py-2" style={{ '--inset': '76px' }}>
@@ -355,6 +371,7 @@ export function HotelRow({ h, ops, sub }) {
         <span className="block text-headline leading-snug truncate">{h.name}</span>
         {(sub || h.address || h.area) && <span className="block text-subhead text-label-2 truncate">{sub || h.address || h.area}</span>}
       </span>
+      <MustStar on={!!h.must} name={h.name} word="must-stay" onToggle={() => ops.updateHotel(h.uid, { must: !h.must })} />
       <PriceCell value={h.price} label={`${h.name} price per night`} onCommit={n => ops.updateHotel(h.uid, { price: n })} />
       <button type="button" onClick={() => ops.removeHotel(h.uid)} aria-label={`Remove ${h.name}`}
         className="w-9 h-9 flex items-center justify-center text-label-3 hover:text-red-ink pressable shrink-0"><X className="w-5 h-5" aria-hidden /></button>

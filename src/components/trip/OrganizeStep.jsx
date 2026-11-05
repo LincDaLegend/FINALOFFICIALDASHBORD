@@ -7,7 +7,7 @@ import { Button, useToast } from '../business/ui.jsx';
 import { useSettings } from '../business/stores.js';
 import { DAYS, addDays, asPlace, fmtDur, stayOf, nightlyFor, peso } from './tripData.js';
 import {
-  PlacePhoto, MustStar, KeyPrompt, ErrorLine, PlanPreview, NextButton, postTrip, tripPayload, isKeyProblem, applyPlan, planSig, fmtDay,
+  PlacePhoto, MustStar, KeyPrompt, ErrorLine, PlanPreview, NextButton, postTrip, tripPayload, isKeyProblem, applyPlan, planSig, fmtDay, PinButton,
 } from './tripUi.jsx';
 
 const toMin = (t) => { const [h, m] = (t || '08:00').split(':').map(Number); return h * 60 + (m || 0); };
@@ -195,7 +195,7 @@ function Board({ trip, ops, costs }) {
         <p className="text-headline flex items-center gap-1.5 px-1 pb-2"><BedDouble className="w-4 h-4 text-[#5856D6]" aria-hidden />Hotels <span className="text-subhead font-normal text-label-2">· drag onto a day</span></p>
         {hotels.length ? (
           <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1 snap-x">
-            {hotels.map(h => <HotelCard key={h.uid} h={h} nights={nightsOf(h.uid)} onDragStart={startDrag({ kind: 'hotel', id: h.uid, from: 'tray' })} onDragEnd={endDrag} dragging={drag?.kind === 'hotel' && drag.id === h.uid && drag.from === 'tray'} />)}
+            {hotels.map(h => <HotelCard key={h.uid} h={h} nights={nightsOf(h.uid)} onMust={() => ops.updateHotel(h.uid, { must: !h.must })} onDragStart={startDrag({ kind: 'hotel', id: h.uid, from: 'tray' })} onDragEnd={endDrag} dragging={drag?.kind === 'hotel' && drag.id === h.uid && drag.from === 'tray'} />)}
           </div>
         ) : <p className="text-subhead text-label-2 px-1 pb-1">Add hotels on the Wishlist step.</p>}
       </section>
@@ -221,7 +221,7 @@ function Board({ trip, ops, costs }) {
                 {over === `${i}:end` && items.length > 0 && <div className="h-1 rounded-full bg-tint" aria-hidden />}
               </div>
               {i < DAYS - 1 && (
-                <NightSlot i={i} hotel={stayOf(trip, i)} hotels={hotels} ops={ops}
+                <NightSlot i={i} hotel={stayOf(trip, i)} pinned={d.pin} hotels={hotels} ops={ops}
                   active={drag?.kind === 'hotel'} hot={drag?.kind === 'hotel' && over === `${i}:end`}
                   onDragOver={dragOver(`${i}:end`)} onDrop={drop(i, null)}
                   onDragStart={(h) => startDrag({ kind: 'hotel', id: h.uid, from: i })} onDragEnd={endDrag}
@@ -235,7 +235,7 @@ function Board({ trip, ops, costs }) {
   );
 }
 
-function HotelCard({ h, nights, onDragStart, onDragEnd, dragging, compact, onClear }) {
+function HotelCard({ h, nights, onDragStart, onDragEnd, dragging, compact, onClear, onMust, pin }) {
   const priced = nightlyFor(h) > 0;
   return (
     <div draggable onDragStart={onDragStart} onDragEnd={onDragEnd}
@@ -243,12 +243,14 @@ function HotelCard({ h, nights, onDragStart, onDragEnd, dragging, compact, onCle
       <div className="flex items-center gap-2.5">
         <span className="w-10 h-10 rounded-[9px] bg-[#5856D6] text-white flex items-center justify-center shrink-0"><BedDouble className="w-5 h-5" aria-hidden /></span>
         <span className="min-w-0 flex-1">
-          <span className="block text-subhead font-semibold leading-snug truncate">{h.name}</span>
+          <span className={`block text-subhead font-semibold leading-snug ${compact ? 'line-clamp-2 break-words' : 'truncate'}`}>{h.name}</span>
           <span className={`block text-footnote tabular ${priced ? 'text-label-2' : 'text-orange-ink font-semibold'}`}>
             {priced ? `${peso(nightlyFor(h))}/night` : 'No price'}
             {!compact && nights && (nights.length ? ` · Night ${nights.join(', ')}` : ' · unused')}
           </span>
         </span>
+        {onMust && <MustStar size="sm" on={!!h.must} name={h.name} word="must-stay" onToggle={onMust} />}
+        {pin}
         {onClear && (
           <button type="button" onClick={onClear} aria-label={`No hotel this night`}
             className="w-7 h-7 -mr-0.5 flex items-center justify-center text-label-3 hover:text-red-ink pressable shrink-0"><X className="w-4 h-4" aria-hidden /></button>
@@ -259,26 +261,27 @@ function HotelCard({ h, nights, onDragStart, onDragEnd, dragging, compact, onCle
 }
 
 /** The bottom of a day column: tonight's hotel. Drop a hotel here, drag it to another night, or pick from the list. */
-function NightSlot({ i, hotel, hotels, ops, active, hot, onDragOver, onDrop, onDragStart, onDragEnd, dragging }) {
+function NightSlot({ i, hotel, pinned, hotels, ops, active, hot, onDragOver, onDrop, onDragStart, onDragEnd, dragging }) {
   return (
     <div onDragOver={onDragOver} onDrop={onDrop}
       className={`rounded-[12px] p-1.5 -mx-0.5 transition-colors ${hot ? 'bg-[rgba(88,86,214,0.18)] ring-2 ring-[#5856D6]' : active ? 'bg-[rgba(88,86,214,0.08)]' : ''}`}>
-      <div className="flex items-center justify-between gap-2 px-1 pb-1">
+      <div className="flex items-center justify-between gap-2 pl-1 h-7">
         <span className="text-footnote font-semibold uppercase tracking-wide text-label-2">Night {i + 1}</span>
-        {hotels.length > 0 && (
-          <select value={hotel?.uid || ''} onChange={e => ops.setNight(i, e.target.value || null)} aria-label={`Hotel for night ${i + 1}`}
-            className="h-6 max-w-[110px] pl-1.5 pr-0.5 rounded-[7px] bg-surface text-footnote font-semibold text-tint-ink outline-none focus:ring-2 focus:ring-tint cursor-pointer">
-            <option value="">None</option>
-            {hotels.map(h => <option key={h.uid} value={h.uid}>{h.name}</option>)}
-          </select>
-        )}
+        {hotel && <PinButton on={!!pinned} night={i + 1} size="sm" onToggle={() => ops.togglePin(i)} />}
       </div>
       {hotel ? (
         <HotelCard h={hotel} compact onDragStart={onDragStart(hotel)} onDragEnd={onDragEnd} dragging={dragging} onClear={() => ops.setNight(i, null)} />
       ) : (
-        <p className={`flex items-center justify-center gap-1.5 h-[56px] rounded-[12px] border-2 border-dashed text-footnote ${active ? 'border-[#5856D6] text-[#5856D6]' : 'border-separator text-label-3'}`}>
-          <BedDouble className="w-4 h-4" aria-hidden />Drop a hotel
-        </p>
+        <div className={`flex flex-col items-center justify-center gap-1 h-[64px] rounded-[12px] border-2 border-dashed text-footnote ${active ? 'border-[#5856D6] text-[#5856D6]' : 'border-separator text-label-3'}`}>
+          <span className="flex items-center gap-1.5"><BedDouble className="w-4 h-4" aria-hidden />Drop a hotel</span>
+          {hotels.length > 0 && (
+            <select value="" onChange={e => e.target.value && ops.setNight(i, e.target.value)} aria-label={`Hotel for night ${i + 1}`}
+              className="h-6 max-w-[120px] px-1.5 rounded-[7px] bg-surface text-footnote font-semibold text-tint-ink outline-none focus:ring-2 focus:ring-tint cursor-pointer">
+              <option value="">or pick…</option>
+              {hotels.map(h => <option key={h.uid} value={h.uid}>{h.name}</option>)}
+            </select>
+          )}
+        </div>
       )}
     </div>
   );

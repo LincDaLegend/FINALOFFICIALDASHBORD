@@ -9,7 +9,7 @@ import { Segmented, Button, useToast, SPRING } from '../business/ui.jsx';
 import {
   DAYS, gasCost, schedule, fmtClock, fmtDur, peso, bookingLinks, mapsLink, addDays, colorOf, placesById, stayOf, nightlyFor,
 } from './tripData.js';
-import { PlacePhoto, DurationStepper, postTrip, tripPayload, fmtDay, fmtKm, HotelRow, HotelForm, isStay } from './tripUi.jsx';
+import { PlacePhoto, DurationStepper, postTrip, tripPayload, fmtDay, fmtKm, HotelRow, HotelForm, isStay, PinButton } from './tripUi.jsx';
 import { Discover } from './WishlistStep.jsx';
 
 const TripMap = dynamic(() => import('./TripMap.jsx'), {
@@ -193,7 +193,10 @@ function TonightCard({ trip, i, hotel, arrive, ops, onHotels }) {
         )}
       </span>
       {hotel ? (
-        <span className="text-headline tabular shrink-0">{peso(nightlyFor(hotel))}</span>
+        <span className="flex items-center gap-1 shrink-0">
+          <span className="text-headline tabular">{peso(nightlyFor(hotel))}</span>
+          <PinButton on={!!trip.days[i].pin} night={i + 1} size="sm" onToggle={() => ops.togglePin(i)} />
+        </span>
       ) : (
         <Button size="sm" variant="tinted" onClick={onHotels} className="shrink-0"><Plus className="w-4 h-4" aria-hidden />Hotel</Button>
       )}
@@ -320,8 +323,13 @@ function Hotels({ trip, setTrip, ops, dayIdx }) {
       const res = await postTrip({ ...tripPayload(trip), mode: 'cost', hotelsOnly: true });
       if (res.noHotels) { toast('Add a price to your hotels first'); return; }
       const prev = trip;
-      setTrip(t => ({ ...t, days: t.days.map((d, k) => (k < DAYS - 1 ? { ...d, hotel: res.hotels[k] ?? null } : d)) }));
-      toast(res.unpriced?.length ? `Cheapest picked · skipped ${res.unpriced.length} with no price` : 'Cheapest hotels picked',
+      setTrip(t => ({ ...t, days: t.days.map((d, k) => {
+        if (k >= DAYS - 1) return d;
+        const h = res.hotels[k] ?? null;
+        return { ...d, hotel: h, pin: !!d.pin && d.hotel === h }; // pinned nights come back unchanged
+      }) }));
+      const note = res.mustMissed?.length ? ` · not enough nights for ${res.mustMissed.join(', ')}` : res.unpriced?.length ? ` · skipped ${res.unpriced.length} with no price` : '';
+      toast(`Cheapest picked${note}`,
         <PiggyBank className="w-4 h-4 text-tint" aria-hidden />, { label: 'Undo', onClick: () => setTrip(prev) });
     } catch (e) {
       toast(e.message);
@@ -376,6 +384,7 @@ function Hotels({ trip, setTrip, ops, dayIdx }) {
                 {hotels.map(h => <option key={h.uid} value={h.uid}>{h.name}</option>)}
               </select>
               <span className="w-[76px] text-right text-callout font-semibold tabular shrink-0">{d.hotel ? peso(nightlyFor(stayOf(trip, k))) : '—'}</span>
+              {d.hotel ? <PinButton on={!!d.pin} night={k + 1} size="sm" onToggle={() => ops.togglePin(k)} /> : <span className="w-7 shrink-0" />}
             </li>
           ))}
           <li className="flex items-center justify-between px-4 py-3">
