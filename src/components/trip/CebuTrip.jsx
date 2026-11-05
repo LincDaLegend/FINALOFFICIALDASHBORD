@@ -37,10 +37,7 @@ export default function CebuTrip() {
         const night = day != null && day < DAYS - 1 ? day : null;
         const have = (trip.hotels || []).find(h => h.id && h.id === p.id);
         if (have) { if (night != null) ops.setNight(night, have.uid); }
-        else {
-          const open = trip.days.slice(0, DAYS - 1).findIndex(d => !d.hotel);
-          ops.addHotel({ id: p.id, name: p.name, area: p.area || '', lat: p.lat, lon: p.lon, wiki: p.wiki || null, price: 0 }, night ?? (day == null && open >= 0 ? open : null));
-        }
+        else ops.addHotel({ id: p.id, name: p.name, area: p.area || '', lat: p.lat, lon: p.lon, wiki: p.wiki || null, price: 0 }, night);
         if (!quiet) toast(night != null ? `Hotel for night ${night + 1}` : have ? 'Already in your hotels' : 'Added to your hotels', <Heart className="w-4 h-4 text-red" fill="currentColor" aria-hidden />);
         return;
       }

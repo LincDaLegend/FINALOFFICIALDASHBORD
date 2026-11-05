@@ -221,6 +221,9 @@ export function PlanPreview({ res, trip, onApply, onBack, stale }) {
             <p className="text-footnote font-medium text-label-2">Gas · {res.after.km} km</p>
             <p className="text-title-2 tabular">{peso(res.after.gas)}</p>
           </div>
+          {res.unpriced?.length > 0 && (
+            <p className="basis-full text-subhead text-orange-ink">No price, left out: {res.unpriced.join(', ')}</p>
+          )}
         </div>
       ) : (
         <div className="flex flex-wrap items-end gap-x-8 gap-y-3">
@@ -393,11 +396,11 @@ export function HotelForm({ trip, ops, near, onNear }) {
   const add = (e) => {
     e.preventDefault();
     if (!ready) return;
-    const firstEmpty = trip.days.slice(0, DAYS - 1).findIndex(d => !d.hotel);
+    // Just an option: nights are picked by you (or Cheapest), never filled automatically
     ops.addHotel({
       name: draft.name.trim(), address: address || null, ...spot, pinned: address && hit ? hit.precision : 'near',
       price: Math.max(0, parseFloat(draft.price) || 0),
-    }, firstEmpty >= 0 ? firstEmpty : null);
+    });
     close();
   };
 

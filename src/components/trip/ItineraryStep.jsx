@@ -318,9 +318,11 @@ function Hotels({ trip, setTrip, ops, dayIdx }) {
     setBusy(true);
     try {
       const res = await postTrip({ ...tripPayload(trip), mode: 'cost', hotelsOnly: true });
+      if (res.noHotels) { toast('Add a price to your hotels first'); return; }
       const prev = trip;
       setTrip(t => ({ ...t, days: t.days.map((d, k) => (k < DAYS - 1 ? { ...d, hotel: res.hotels[k] ?? null } : d)) }));
-      toast('Cheapest hotels picked', <PiggyBank className="w-4 h-4 text-tint" aria-hidden />, { label: 'Undo', onClick: () => setTrip(prev) });
+      toast(res.unpriced?.length ? `Cheapest picked · skipped ${res.unpriced.length} with no price` : 'Cheapest hotels picked',
+        <PiggyBank className="w-4 h-4 text-tint" aria-hidden />, { label: 'Undo', onClick: () => setTrip(prev) });
     } catch (e) {
       toast(e.message);
     } finally { setBusy(false); }

@@ -341,10 +341,18 @@ function shortestRoute({ dayInfo, stops, M, metric, scope, dayIndex, extra = [],
  * hotel options (point index n + h, with `nightly` = what the group pays per night). Every night
  * gets exactly one hotel from the options. Unless `hotelsOnly`, whole days may swap places (the
  * day with the trip's first stop stays first, the one with its last stop stays last), stops are
- * re-ordered inside each day, and stops may move between days. Days that run past their hours
- * get a penalty so they're avoided.
+ * re-ordered inside each day, and stops may move between days. The cost is only gas + hotels;
+ * a rearrangement is kept only if it is cheaper AND doesn't make the days run later than before.
  */
-function minCost({ stops, slots, cands, M, gasPerKm, backBy, hotelsOnly }) {
+function minCost(args) {
+  const res = solveCost(args);
+  if (args.hotelsOnly) return res;
+  // Safety net: never hand back something pricier or later than "your days as they are + cheapest hotels"
+  const keep = solveCost({ ...args, hotelsOnly: true });
+  return res.raw.total > keep.raw.total + 0.5 || res.raw.late > keep.raw.late + 0.5 ? keep : res;
+}
+
+function solveCost({ stops, slots, cands, M, gasPerKm, backBy, hotelsOnly }) {
   const n = stops.length, D = slots.length, H = cands.length;
   const pinFirst = slots[0].ids[0] ?? null;
   const lastIds = slots[D - 1].ids;
@@ -374,21 +382,24 @@ function minCost({ stops, slots, cands, M, gasPerKm, backBy, hotelsOnly }) {
     memo.set(key, out);
     return out;
   };
-  const dayPrice = (r, start) => r.km * gasPerKm + Math.max(0, r.minutes - windowOf(start)) * 50; // ₱50 per minute over the day's hours
+  // Cost is only what you pay: gas + hotels. Running late is never traded for money; it's a guard on rearranging (below).
+  const dayPrice = (r) => r.km * gasPerKm;
+  const lateBy = (r, start) => Math.max(0, r.minutes - windowOf(start));
 
   // Cheapest hotel per night for a given arrangement of days (dynamic programming over nights)
   const evaluate = (arr) => {
     if (H === 0 || D === 1) {
       let total = 0;
-      arr.forEach(sl => { total += dayPrice(route(sl.ids, null, null), sl.start); });
-      return { total, hotels: Array(Math.max(0, D - 1)).fill(null) };
+      arr.forEach(sl => { total += dayPrice(route(sl.ids, null, null)); });
+      const hotels = Array(Math.max(0, D - 1)).fill(null);
+      return { total, hotels, late: lateOf(arr, hotels) };
     }
-    let f = cands.map((c, h) => ({ cost: dayPrice(route(arr[0].ids, null, n + h), arr[0].start) + c.nightly, path: [h] }));
+    let f = cands.map((c, h) => ({ cost: dayPrice(route(arr[0].ids, null, n + h)) + c.nightly, path: [h] }));
     for (let i = 1; i < D - 1; i++) {
       f = cands.map((c, h) => {
         let best = null;
         f.forEach((prev, hp) => {
-          const v = prev.cost + dayPrice(route(arr[i].ids, n + hp, n + h), arr[i].start) + c.nightly;
+          const v = prev.cost + dayPrice(route(arr[i].ids, n + hp, n + h)) + c.nightly;
           if (!best || v < best.cost) best = { cost: v, path: [...prev.path, h] };
         });
         return best;
@@ -396,11 +407,18 @@ function minCost({ stops, slots, cands, M, gasPerKm, backBy, hotelsOnly }) {
     }
     let best = null;
     f.forEach((prev, hp) => {
-      const v = prev.cost + dayPrice(route(arr[D - 1].ids, n + hp, null), arr[D - 1].start);
+      const v = prev.cost + dayPrice(route(arr[D - 1].ids, n + hp, null));
       if (!best || v < best.cost) best = { cost: v, path: prev.path };
     });
-    return { total: best.cost, hotels: best.path };
+    return { total: best.cost, hotels: best.path, late: lateOf(arr, best.path) };
   };
+  // Minutes past the day's hours, summed over the trip, for an arrangement + hotel choice
+  function lateOf(arr, hotels) {
+    const at = (night) => (night < 0 || night >= D - 1 || hotels[night] == null ? null : n + hotels[night]);
+    return arr.reduce((t, sl, i) => t + lateBy(route(sl.ids, at(i - 1), at(i)), sl.start), 0);
+  }
+  // A rearrangement must be cheaper and must not make the days run later than they already do
+  const better = (ev, cur) => ev.total < cur.total - 0.5 && ev.late <= cur.late;
 
   let arr = slots.map(sl => ({ ids: [...sl.ids], start: sl.start }));
   let cur = evaluate(arr);
@@ -419,7 +437,7 @@ function minCost({ stops, slots, cands, M, gasPerKm, backBy, hotelsOnly }) {
       const order = [...(fixFirst ? [0] : []), ...p, ...(fixLast ? [D - 1] : [])];
       const trial = order.map(k => slots[k]).map(sl => ({ ids: [...sl.ids], start: sl.start }));
       const ev = evaluate(trial);
-      if (ev.total < cur.total - 0.5) { arr = trial; cur = ev; }
+      if (better(ev, cur)) { arr = trial; cur = ev; }
     }
     // 2. Move single stops to another day when it saves money (kept small so it stays fast)
     if (H <= 6 && n <= 30) {
@@ -435,7 +453,7 @@ function minCost({ stops, slots, cands, M, gasPerKm, backBy, hotelsOnly }) {
               if (b === a) continue;
               const trial = arr.map((sl, i) => (i === a ? { ...sl, ids: without } : i === b ? { ...sl, ids: [...sl.ids, k] } : sl));
               const ev = evaluate(trial);
-              if (ev.total < cur.total - 0.5) { arr = trial; cur = ev; improved = true; break; }
+              if (better(ev, cur)) { arr = trial; cur = ev; improved = true; break; }
             }
           }
         }
@@ -445,14 +463,14 @@ function minCost({ stops, slots, cands, M, gasPerKm, backBy, hotelsOnly }) {
 
   // Final routes with the chosen hotels
   const hotelPoint = (night) => (night < 0 || night >= D - 1 || cur.hotels[night] == null ? null : n + cur.hotels[night]);
-  let dist = 0, drive = 0, stay = 0;
+  let dist = 0, drive = 0, stay = 0, late = 0;
   const days = arr.map((sl, i) => {
     const r = route(sl.ids, hotelPoint(i - 1), hotelPoint(i));
-    dist += r.km; drive += r.min;
+    dist += r.km; drive += r.min; late += lateBy(r, sl.start);
     return { ids: r.order, start: sl.start };
   });
   cur.hotels.forEach(h => { if (h != null) stay += cands[h].nightly; });
-  return { days, hotels: cur.hotels, totals: { km: Math.round(dist), min: Math.round(drive), gas: Math.round(dist * gasPerKm), stay: Math.round(stay), total: Math.round(dist * gasPerKm + stay) } };
+  return { days, hotels: cur.hotels, raw: { total: dist * gasPerKm + stay, late }, totals: { km: Math.round(dist), min: Math.round(drive), gas: Math.round(dist * gasPerKm), stay: Math.round(stay), total: Math.round(dist * gasPerKm + stay) } };
 }
 
 export async function GET(req) {
@@ -705,9 +723,11 @@ export async function POST(req) {
   // ── Lowest cost: gas + one hotel per night (no AI) ──
   if (body.mode === 'cost') {
     if (!n) return NextResponse.json({ error: 'Add some places first.' }, { status: 400 });
-    const cands = (Array.isArray(body.hotels) ? body.hotels : []).slice(0, 12)
+    const sent = Array.isArray(body.hotels) ? body.hotels : [];
+    const cands = sent.slice(0, 12)
       .filter(h => num(h.lat) != null && num(h.lon) != null)
-      .map(h => ({ uid: str(h.uid, 40), name: str(h.name), lat: +h.lat, lon: +h.lon, nightly: Math.max(0, num(h.nightly) || 0) }));
+      .map(h => ({ uid: str(h.uid, 40), name: str(h.name), lat: +h.lat, lon: +h.lon, nightly: Math.max(0, num(h.nightly) || 0) }))
+      .filter(h => h.nightly > 0); // a hotel with no price isn't free: leave it out until it has one
     const fuel = body.fuel || {};
     const gasPerKm = (num(fuel.pricePerL) || 65) / Math.max(1, num(fuel.kmPerL) || 10);
     const Mc = await driveMatrix([...stops, ...cands]);
@@ -725,10 +745,12 @@ export async function POST(req) {
     const res = minCost({ stops, slots, cands, M: Mc, gasPerKm, backBy: backByMin, hotelsOnly: !!body.hotelsOnly });
     return NextResponse.json({
       days: res.days.map(d => ({ title: '', start: d.start, stops: d.ids.map(k => ({ uid: stops[k].uid, mins: stops[k].mins })) })),
-      hotels: res.hotels.map(h => (h == null ? null : cands[h].uid)),
+      // No priced hotels → don't touch the nights at all
+      hotels: cands.length ? res.hotels.map(h => (h == null ? null : cands[h].uid)) : undefined,
       unscheduled: extra.map(k => stops[k].uid),
       before: { km: Math.round(bKm), min: Math.round(bMin), gas: Math.round(bKm * gasPerKm), stay: Math.round(bStay), total: Math.round(bKm * gasPerKm + bStay) },
       after: res.totals, metric: 'cost', noHotels: cands.length === 0, approx: Mc.approx,
+      unpriced: sent.filter(h => !(num(h.nightly) > 0)).map(h => str(h.name)),
     });
   }
 
