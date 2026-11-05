@@ -201,6 +201,12 @@ export function PlanPreview({ res, trip, onApply, onBack, stale }) {
   const left = (res.unscheduled || []).map(u => byId[u]).filter(Boolean);
   const mustLeft = left.filter(p => p.must);
   const nothing = res.days.every((_, i) => !changed(i));
+  // Filling nights that are empty now always costs more — say that instead of "more than now"
+  const nightsNow = trip.days.slice(0, DAYS - 1).filter(d => d.hotel).length;
+  const addsNights = res.hotels ? Math.max(0, res.hotels.slice(0, DAYS - 1).filter(Boolean).length - nightsNow) : 0;
+  // Spots that end up on a different day than now
+  const dayNow = new Map(); trip.days.forEach((d, i) => d.stops.forEach(u => dayNow.set(u, i)));
+  const moved = res.days.flatMap((d, i) => d.stops.filter(x => x.uid && dayNow.has(x.uid) && dayNow.get(x.uid) !== i).map(x => ({ uid: x.uid, to: i + 1 })));
 
   return (
     <div className="space-y-4">
@@ -213,7 +219,8 @@ export function PlanPreview({ res, trip, onApply, onBack, stale }) {
               {res.before.total > res.after.total && <span className="text-callout font-semibold text-label-2 ml-2 line-through">{peso(res.before.total)}</span>}
             </p>
             {res.before.total > res.after.total && <p className="text-subhead font-semibold text-green-ink">Save {peso(res.before.total - res.after.total)}</p>}
-            {res.after.total > res.before.total && res.before.total > 0 && <p className="text-subhead font-semibold text-orange-ink">{peso(res.after.total - res.before.total)} more than now</p>}
+            {res.after.total > res.before.total && res.before.total > 0 && !addsNights && <p className="text-subhead font-semibold text-orange-ink">{peso(res.after.total - res.before.total)} more than now</p>}
+            {addsNights > 0 && <p className="text-subhead font-semibold text-label-2">Adds hotels for {addsNights} night{addsNights > 1 ? 's' : ''}</p>}
           </div>
           <div>
             <p className="text-footnote font-medium text-label-2">Hotels</p>
@@ -287,6 +294,14 @@ export function PlanPreview({ res, trip, onApply, onBack, stale }) {
         <p className="text-subhead text-label-2">
           Not planned: {left.map((p, k) => <span key={p.uid} className={p.must ? 'text-orange-ink font-semibold' : ''}>{p.name}{p.must ? ' (must-do)' : ''}{k < left.length - 1 ? ', ' : ''}</span>)}
         </p>
+      )}
+      {moved.length > 0 && (
+        <p className="text-subhead text-label-2">
+          Moved: {moved.map((m, k) => <span key={m.uid}>{byId[m.uid]?.name} → Day {m.to}{k < moved.length - 1 ? ', ' : ''}</span>)}
+        </p>
+      )}
+      {res.late?.some(m => m > 0) && (
+        <ErrorLine>Still too long: {res.late.map((m, i) => (m > 0 ? `Day ${i + 1} by ${fmtDur(m)}` : null)).filter(Boolean).join(', ')}</ErrorLine>
       )}
       {isCost && res.noHotels && <ErrorLine>No hotels yet, so this counts gas only.</ErrorLine>}
       {mustLeft.length > 0 && <ErrorLine>Some must-dos didn't fit.</ErrorLine>}

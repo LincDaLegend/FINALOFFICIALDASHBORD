@@ -79,9 +79,14 @@ function AiOrganizer({ trip, setTrip, ops }) {
               <Button variant="gray" title="Fewest km. No AI." onClick={() => run('route')} disabled={!!state.loading || !trip.pool.length}>
                 {state.loading === 'route' ? <><Loader2 className="w-4 h-4 animate-spin" aria-hidden />Working…</> : <><Route className="w-4 h-4" aria-hidden />Least driving</>}
               </Button>
-              <Button variant="gray" title="Cheapest gas + hotels. No AI." onClick={() => run('cost')} disabled={!!state.loading || !trip.days.some(d => d.stops.length)}>
+              <Button variant="gray" title="Makes every day fit your times, then cheapest gas + hotels. No AI." onClick={() => run('cost')} disabled={!!state.loading || !trip.days.some(d => d.stops.length)}>
                 {state.loading === 'cost' ? <><Loader2 className="w-4 h-4 animate-spin" aria-hidden />Working…</> : <><PiggyBank className="w-4 h-4" aria-hidden />Lowest cost</>}
               </Button>
+              <label className="ml-auto flex items-center gap-2 text-subhead text-label-2">
+                Back by
+                <input type="time" value={prefs.backBy || '21:00'} onChange={e => e.target.value && set({ backBy: e.target.value })}
+                  className="h-9 px-2 rounded-[10px] bg-surface text-callout font-semibold text-label tabular outline-none focus:ring-2 focus:ring-tint" />
+              </label>
             </div>
             {state.error && <ErrorLine>{state.error}</ErrorLine>}
             {isKeyProblem(state.code) && <KeyPrompt onKey={(k) => run('ai', k)} />}
@@ -157,13 +162,13 @@ function Board({ trip, ops, costs }) {
           <PlacePhoto place={p} className="w-10 h-10 rounded-[9px]" iconSize={18} />
           <span className="min-w-0 flex-1 text-subhead font-semibold leading-snug line-clamp-2">{p.name}</span>
         </div>
-        <div className="flex items-center gap-1 mt-1.5 pl-0.5">
-          <span className="text-footnote text-label-2 tabular">{fmtDur(p.mins)}</span>
+        <div className="flex flex-wrap items-center gap-1 mt-1.5 pl-0.5 min-w-0">
+          <DurationPick mins={p.mins} name={p.name} onChange={mins => ops.update(p.uid, { mins })} />
           <MustStar size="sm" on={p.must} name={p.name} onToggle={() => ops.update(p.uid, { must: !p.must })} />
           {/* Tap-friendly way to move a card (phones can't drag and drop) */}
           <select value={col === 'pool' ? 'pool' : String(col)} aria-label={`Move ${p.name}`}
             onChange={e => ops.move(p.uid, e.target.value === 'pool' ? null : +e.target.value)}
-            className="ml-auto h-7 max-w-[96px] pl-2 pr-1 rounded-[8px] bg-fill text-footnote font-semibold text-tint-ink outline-none focus:ring-2 focus:ring-tint cursor-pointer">
+            className="ml-auto h-7 w-[76px] min-w-0 pl-1.5 pr-0.5 rounded-[8px] bg-fill text-footnote font-semibold text-tint-ink outline-none focus:ring-2 focus:ring-tint cursor-pointer">
             <option value="pool">Not planned</option>
             {trip.days.map((_, i) => <option key={i} value={i}>Day {i + 1}</option>)}
           </select>
@@ -212,9 +217,17 @@ function Board({ trip, ops, costs }) {
               className={`rounded-[16px] p-2.5 flex flex-col gap-2 min-h-[180px] transition-colors ${isOver(i) ? 'bg-tint-soft ring-2 ring-tint' : 'bg-fill'}`}>
               <div className="px-1.5 pt-0.5">
                 <p className="text-headline">Day {i + 1} <span className="text-subhead font-normal text-label-2">· {fmtDay(addDays(trip.startDate, i), { weekday: 'short', day: 'numeric' })}</span></p>
-                <p className={`text-footnote tabular ${long ? 'text-orange-ink font-semibold' : 'text-label-2'}`}>
-                  {items.length ? `${fmtDur(total)}${long ? ' · too long' : ''}` : 'Free'}
-                </p>
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mt-0.5">
+                  <label className="flex items-center gap-1 text-footnote text-label-2">
+                    Leave
+                    <input type="time" value={d.start} aria-label={`Day ${i + 1} leave time`}
+                      onChange={e => e.target.value && ops.patchDay(i, x => ({ ...x, start: e.target.value }))}
+                      className="h-6 w-[78px] px-1 rounded-[7px] bg-surface text-footnote font-semibold text-label tabular outline-none focus:ring-2 focus:ring-tint" />
+                  </label>
+                  <p className={`text-footnote tabular ${long ? 'text-orange-ink font-semibold' : 'text-label-2'}`}>
+                    {items.length ? `${fmtDur(total)}${long ? ' · too long' : ''}` : 'Free'}
+                  </p>
+                </div>
               </div>
               <div className="flex flex-col gap-2 flex-1">
                 {items.length ? items.map(p => card(p, i)) : dropHint}
@@ -284,5 +297,18 @@ function NightSlot({ i, hotel, pinned, hotels, ops, active, hot, onDragOver, onD
         </div>
       )}
     </div>
+  );
+}
+
+const DURATIONS = [15, 30, 45, 60, 90, 120, 150, 180, 210, 240, 300, 360, 420, 480];
+
+/** How long you stay at a spot; Lowest cost and AI plan around it. */
+function DurationPick({ mins, name, onChange }) {
+  const opts = DURATIONS.includes(mins) ? DURATIONS : [...DURATIONS, mins].sort((a, b) => a - b);
+  return (
+    <select value={mins} onChange={e => onChange(+e.target.value)} aria-label={`Time at ${name}`} title="Time there"
+      className="h-7 pl-1.5 pr-0.5 rounded-[8px] bg-surface-2 text-footnote font-semibold tabular text-label outline-none focus:ring-2 focus:ring-tint cursor-pointer">
+      {opts.map(m => <option key={m} value={m}>{fmtDur(m)}</option>)}
+    </select>
   );
 }

@@ -344,6 +344,247 @@ function shortestRoute({ dayInfo, stops, M, metric, scope, dayIndex, extra = [],
  * re-ordered inside each day, and stops may move between days. The cost is only gas + hotels;
  * a rearrangement is kept only if it is cheaper AND doesn't make the days run later than before.
  */
+// Time of day a spot should be visited: arrive between [from, to] (minutes after midnight)
+const WHEN = { morning: [6 * 60, 11 * 60], afternoon: [12 * 60, 16 * 60], sunset: [16 * 60, 17 * 60 + 30] };
+
+/**
+ * Reshuffle: put every spot on a day so each day fits its rules (time of day, back-by time, spots kept on
+ * their day, the trip's first/last stop), then make it as cheap as possible (gas + hotels, keeping pinned
+ * nights and must-stays). Rules always come first: a cheaper plan that breaks them is never chosen.
+ * Spots that can't fit anywhere go back to the wishlist (must-dos are never dropped).
+ */
+function reshuffle({ stops, days, cands, fixed = [], M, gasPerKm, backBy, extra = [] }) {
+  const t0 = Date.now(), BUDGET = 9000;
+  const D = days.length, n = stops.length, NN = Math.max(0, D - 1);
+  const BIG = 1e6; // one minute of broken rules outweighs any amount of money
+  const km = (a, b) => (a === b ? 0 : M.km[a]?.[b] ?? 1e6);
+  const mn = (a, b) => (a === b ? 0 : M.min[a]?.[b] ?? 1e6);
+  const pinFirst = days[0]?.ids[0] ?? null;
+  const lastIds = days[D - 1]?.ids || [];
+  const pinLast = lastIds.length && lastIds[lastIds.length - 1] !== pinFirst ? lastIds[lastIds.length - 1] : null;
+  const lockOf = new Map();
+  days.forEach((d, i) => d.ids.forEach(k => { if (stops[k].keep || k === pinFirst || k === pinLast) lockOf.set(k, i); }));
+
+  // Walk a day in a given order: drive, wait for a spot's time window, stay, and finally drive to tonight's hotel
+  const walk = (i, seq, s, e) => {
+    let t = days[i].start, prev = s, dist = 0, drive = 0, broken = 0;
+    for (const k of seq) {
+      if (prev != null) { dist += km(prev, k); drive += mn(prev, k); t += mn(prev, k); }
+      const w = WHEN[stops[k].when];
+      if (w) { if (t < w[0]) t = w[0]; else if (t > w[1]) broken += t - w[1]; }
+      t += stops[k].mins;
+      prev = k;
+    }
+    if (e != null && prev != null) { dist += km(prev, e); drive += mn(prev, e); t += mn(prev, e); }
+    broken += Math.max(0, t - backBy);
+    if (!seq.length) { broken = 0; t = days[i].start; } // a free day only moves you between hotels
+    if (!seq.length && s != null && e != null) { dist = km(s, e); drive = mn(s, e); }
+    return { order: seq, km: dist, min: drive, broken, end: t };
+  };
+  const worse = (a, b) => a.broken > b.broken + 0.5 || (Math.abs(a.broken - b.broken) <= 0.5 && a.km > b.km + 1e-6);
+
+  // Best order for a set of spots on day i between start point s and end point e
+  const memo = new Map();
+  const dayRoute = (i, ids, s, e) => {
+    const key = `${i}|${[...ids].sort((a, b) => a - b).join(',')}|${s}|${e}`;
+    if (memo.has(key)) return memo.get(key);
+    const first = i === 0 && ids.includes(pinFirst) ? pinFirst : null;
+    const last = i === D - 1 && ids.includes(pinLast) ? pinLast : null;
+    const free = ids.filter(k => k !== first && k !== last);
+    const wrap = (mid) => [...(first != null ? [first] : []), ...mid, ...(last != null ? [last] : [])];
+    let best = null;
+    const tryOrder = (mid) => { const r = walk(i, wrap(mid), s, e); if (!best || worse(best, r)) best = r; };
+    if (free.length <= 6) {
+      const perm = (rest, acc) => { if (!rest.length) { tryOrder(acc); return; } rest.forEach((x, k) => perm([...rest.slice(0, k), ...rest.slice(k + 1)], [...acc, x])); };
+      perm(free, []);
+    } else {
+      // Many spots: shortest order, then move single spots around while it helps
+      let cur = heldKarp(free.slice(0, 11), first ?? s, last ?? e, km).concat(free.slice(11));
+      tryOrder(cur);
+      for (let improved = true, g = 0; improved && g < 20; g++) {
+        improved = false;
+        for (let a = 0; a < cur.length; a++) for (let b = 0; b < cur.length; b++) {
+          if (a === b) continue;
+          const nxt = [...cur]; const [x] = nxt.splice(a, 1); nxt.splice(b, 0, x);
+          const r = walk(i, wrap(nxt), s, e);
+          if (worse(best, r)) { best = r; cur = nxt; improved = true; }
+        }
+      }
+    }
+    memo.set(key, best);
+    return best;
+  };
+
+  // A whole plan: cheapest hotels for this spot-to-day split (pinned nights fixed, must-stays first)
+  const mustIdx = cands.map((c, h) => (c.must ? h : -1)).filter(h => h >= 0).slice(0, 4);
+  const bit = (h) => { const k = mustIdx.indexOf(h); return k < 0 ? 0 : 1 << k; };
+  const pop = (m) => { let c = 0; for (; m; m &= m - 1) c++; return c; };
+  const allowed = (night) => (fixed[night] != null ? [fixed[night]] : cands.map((_, h) => h));
+  const price = (r) => r.broken * BIG + r.km * gasPerKm;
+  const evaluate = (assign) => {
+    if (!cands.length || D === 1) {
+      const routes = assign.map((ids, i) => dayRoute(i, ids, null, null));
+      return { score: routes.reduce((t, r) => t + price(r), 0), hotels: Array(NN).fill(null), cover: 0 };
+    }
+    const put = (m, h, mask, cost, path) => { const k = h * 16 + mask; const o = m.get(k); if (!o || cost < o.cost) m.set(k, { h, mask, cost, path }); };
+    let f = new Map();
+    for (const h of allowed(0)) put(f, h, bit(h), price(dayRoute(0, assign[0], null, n + h)) + (cands[h].weigh ?? cands[h].nightly), [h]);
+    for (let i = 1; i < NN; i++) {
+      const g = new Map();
+      for (const prev of f.values()) for (const h of allowed(i)) put(g, h, prev.mask | bit(h), prev.cost + price(dayRoute(i, assign[i], n + prev.h, n + h)) + (cands[h].weigh ?? cands[h].nightly), [...prev.path, h]);
+      f = g;
+    }
+    let best = null;
+    for (const prev of f.values()) {
+      const v = prev.cost + price(dayRoute(D - 1, assign[D - 1], n + prev.h, null));
+      const cover = pop(prev.mask);
+      if (!best || cover > best.cover || (cover === best.cover && v < best.score)) best = { score: v, hotels: prev.path, cover };
+    }
+    return best;
+  };
+  const better = (a, b) => a.cover > b.cover || (a.cover === b.cover && a.score < b.score - 0.5);
+
+  // A day that has plans keeps at least one spot (an emptied day isn't a real trip)
+  const hadPlans = days.map(d => d.ids.length > 0);
+  const okDays = (a) => a.every((ids, i) => !hadPlans[i] || ids.length > 0);
+
+  let assign = days.map(d => [...d.ids]);
+  // Unplanned must-dos join the day where they fit best
+  for (const k of extra.filter(k => stops[k].must)) {
+    let best = null;
+    for (let b = 0; b < D; b++) { const trial = assign.map((ids, i) => (i === b ? [...ids, k] : ids)); const ev = evaluate(trial); if (!best || better(ev, best.ev)) best = { b, ev }; }
+    assign[best.b].push(k);
+  }
+  let cur = evaluate(assign);
+  const movable = (k) => !lockOf.has(k);
+
+  const search = () => {
+    for (let improved = true; improved && Date.now() - t0 < BUDGET;) {
+      improved = false;
+      // Move one spot to another day
+      for (let a = 0; a < D && !improved; a++) for (const k of assign[a]) {
+        if (!movable(k)) continue;
+        for (let b = 0; b < D; b++) {
+          if (b === a) continue;
+          const trial = assign.map((ids, i) => (i === a ? ids.filter(x => x !== k) : i === b ? [...ids, k] : ids));
+          if (!okDays(trial)) continue;
+          const ev = evaluate(trial);
+          if (better(ev, cur)) { assign = trial; cur = ev; improved = true; break; }
+        }
+        if (improved) break;
+      }
+      // Swap two spots between days
+      for (let a = 0; a < D && !improved; a++) for (const k of assign[a]) {
+        if (!movable(k)) continue;
+        for (let b = a + 1; b < D && !improved; b++) for (const j of assign[b]) {
+          if (!movable(j)) continue;
+          const trial = assign.map((ids, i) => (i === a ? ids.map(x => (x === k ? j : x)) : i === b ? ids.map(x => (x === j ? k : x)) : ids));
+          const ev = evaluate(trial);
+          if (better(ev, cur)) { assign = trial; cur = ev; improved = true; break; }
+        }
+      }
+    }
+  };
+  search();
+
+  // Escape "good enough" plans: also try one rebuilt from scratch, then shake the best one a few times
+  let seed = 7;
+  const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
+  const keepBest = (fn) => {
+    const saved = { assign, cur };
+    fn(); search();
+    if (!okDays(assign) || !better(cur, saved.cur)) { assign = saved.assign; cur = saved.cur; }
+  };
+  keepBest(() => {
+    const base = days.map(() => []);
+    lockOf.forEach((i, k) => base[i].push(k));
+    const free = assign.flat().filter(k => !lockOf.has(k)).sort((a, b) => stops[b].mins - stops[a].mins);
+    for (const k of free) {
+      // empty days that need a spot get one first, otherwise the cheapest day that fits
+      const needy = base.findIndex((ids, i) => hadPlans[i] && !ids.length);
+      if (needy >= 0) { base[needy].push(k); continue; }
+      let best = null;
+      for (let b = 0; b < D; b++) { const trial = base.map((ids, i) => (i === b ? [...ids, k] : ids)); const ev = evaluate(trial); if (!best || better(ev, best.ev)) best = { b, ev }; }
+      base[best.b].push(k);
+    }
+    assign = base; cur = evaluate(base);
+  });
+  for (let kick = 0; kick < 2000 && Date.now() - t0 < BUDGET * 0.5; kick++) {
+    keepBest(() => {
+      // Move 2–3 random spots, then refill any emptied day with a random spot, then let the search tidy up
+      const trial = assign.map(ids => [...ids]);
+      for (let m = 0, moves = 2 + Math.floor(rnd() * 2); m < moves; m++) {
+        const from = Math.floor(rnd() * D), pick = trial[from].filter(movable);
+        if (!pick.length) continue;
+        const k = pick[Math.floor(rnd() * pick.length)], to = Math.floor(rnd() * D);
+        trial[from] = trial[from].filter(x => x !== k); trial[to].push(k);
+      }
+      trial.forEach((ids, i) => {
+        if (!hadPlans[i] || ids.length) return;
+        const donors = trial.map((x, j) => (x.filter(movable).length > 1 ? j : -1)).filter(j => j >= 0);
+        if (!donors.length) return;
+        const j = donors[Math.floor(rnd() * donors.length)], pick = trial[j].filter(movable), k = pick[Math.floor(rnd() * pick.length)];
+        trial[j] = trial[j].filter(x => x !== k); trial[i].push(k);
+      });
+      if (okDays(trial)) { assign = trial; cur = evaluate(trial); }
+    });
+  }
+
+  // Still breaking a rule? Send the spot whose removal helps most back to the wishlist (never a must-do)
+  const brokenOf = (assign, hotels) => assign.map((ids, i) => {
+    const s = i > 0 && hotels[i - 1] != null ? n + hotels[i - 1] : null, e = i < NN && hotels[i] != null ? n + hotels[i] : null;
+    return dayRoute(i, ids, s, e).broken;
+  });
+  const dropped = [];
+  while (brokenOf(assign, cur.hotels).some(b => b > 0.5) && Date.now() - t0 < BUDGET) {
+    let best = null;
+    assign.forEach((ids, a) => ids.forEach(k => {
+      if (stops[k].must || k === pinFirst || k === pinLast) return;
+      const trial = assign.map((x, i) => (i === a ? x.filter(y => y !== k) : x));
+      const ev = evaluate(trial);
+      if (!best || better(ev, best.ev)) best = { trial, ev, k };
+    }));
+    if (!best || !better(best.ev, cur)) break;
+    assign = best.trial; cur = best.ev; dropped.push(best.k);
+    search();
+  }
+
+  const hotelAt = (night) => (night < 0 || night >= NN || cur.hotels[night] == null ? null : n + cur.hotels[night]);
+  let dist = 0, drive = 0, stay = 0;
+  const out = assign.map((ids, i) => {
+    const r = dayRoute(i, ids, hotelAt(i - 1), hotelAt(i));
+    dist += r.km; drive += r.min;
+    return { ids: r.order, late: Math.round(r.broken) };
+  });
+  cur.hotels.forEach(h => { if (h != null) stay += cands[h].nightly; });
+  return {
+    days: out, hotels: cur.hotels, dropped,
+    totals: { km: Math.round(dist), min: Math.round(drive), gas: Math.round(dist * gasPerKm), stay: Math.round(stay), total: Math.round(dist * gasPerKm + stay) },
+  };
+}
+
+/** Today's plan, walked with the same rules as reshuffle (your order, your nights): cost + minutes late per day. */
+function reshuffleBefore({ stops, days, cands, nights, M, gasPerKm, backBy }) {
+  const n = stops.length, D = days.length;
+  let dist = 0, drive = 0, stay = 0;
+  const late = days.map((d, i) => {
+    const s = i > 0 && nights[i - 1] != null ? n + nights[i - 1] : null, e = i < D - 1 && nights[i] != null ? n + nights[i] : null;
+    let t = d.start, prev = s, broken = 0;
+    for (const k of d.ids) {
+      if (prev != null) { dist += M.km[prev]?.[k] ?? 0; drive += M.min[prev]?.[k] ?? 0; t += M.min[prev]?.[k] ?? 0; }
+      const w = WHEN[stops[k].when];
+      if (w) { if (t < w[0]) t = w[0]; else if (t > w[1]) broken += t - w[1]; }
+      t += stops[k].mins; prev = k;
+    }
+    const from = prev ?? s;
+    if (e != null && from != null) { dist += M.km[from]?.[e] ?? 0; drive += M.min[from]?.[e] ?? 0; t += M.min[from]?.[e] ?? 0; }
+    if (d.ids.length) broken += Math.max(0, t - backBy);
+    return Math.round(broken);
+  });
+  nights.forEach(h => { if (h != null) stay += cands[h].nightly; });
+  return { late, totals: { km: Math.round(dist), min: Math.round(drive), gas: Math.round(dist * gasPerKm), stay: Math.round(stay), total: Math.round(dist * gasPerKm + stay) } };
+}
+
 /**
  * The hotels an optimizer may choose from, from the request: priced ones, plus any unpriced one you
  * starred or already put on a night (those keep their spot; others with no price are left out).
@@ -609,8 +850,9 @@ const PLAN_SCHEMA = {
 
 const ORGANIZE_SYSTEM = `You organise a traveller's wishlist for a road trip around Cebu province, Philippines, into days. You receive the wishlist (S ids, must-dos marked), the day each item is on now (if any), the hotel options (H ids, price per night for the whole group, must-stays marked), which nights are fixed to a hotel, a driving matrix (minutes / km) between all of them, and the traveller's own notes on how they want to travel. Return the complete day-by-day itinerary and the hotel for each night.
 
-You decide which wishlist places to include, which day each goes on, their order, each day's leave time, and how long to spend at each.
+You decide which wishlist places to include, which day each goes on, their order, and each day's leave time. The minutes at each place are the traveller's own choice: keep them exactly.
 - Follow the traveller's notes closely: they are your criteria and constraints (pace, hours, driving limits, must-dos, timing wishes). Where the notes don't say, plan a balanced trip: leave from 07:00, back by 21:00, under about 4 hours of driving a day.
+- Every day must fit between its leave time and the back-by time, counting driving and the minutes at each place. If a long stay makes a day too full, move places to another day, or leave out places that are not must-dos.
 - Include every must-do unless it truly cannot fit. Include other wishlist places when they fit; leave the rest out (they stay on the wishlist).
 - Only add places that are not on the wishlist (ref "") when the notes ask for it, for example "add a lunch spot each day". Then add only real, well-known places in Cebu province you are confident exist, with their official name, town, category and coordinates.
 - Hotels: pick one hotel (H id) for every night; a night comes after each day except the last. Keep every fixed night as given. Use each MUST-STAY hotel for at least one night. Otherwise choose hotels that keep the whole trip cheap (nightly price plus driving to and from them) and sit well for the next day's places, unless the notes say otherwise. Use "" only when there are no hotel options.
@@ -739,7 +981,7 @@ export async function POST(req) {
   // Wishlist places (S) and distinct hotels (H)
   const stops = (Array.isArray(body.places) ? body.places : []).slice(0, 60)
     .filter(p => num(p.lat) != null && num(p.lon) != null)
-    .map(p => ({ uid: str(p.uid, 40), name: str(p.name), area: str(p.area), lat: +p.lat, lon: +p.lon, mins: Math.round(num(p.mins) || 60), must: !!p.must }));
+    .map(p => ({ uid: str(p.uid, 40), name: str(p.name), area: str(p.area), lat: +p.lat, lon: +p.lon, mins: Math.round(num(p.mins) || 60), must: !!p.must, keep: !!p.keep, when: WHEN[p.when] ? p.when : 'any' }));
   const n = stops.length;
   const idx = new Map(stops.map((s, k) => [s.uid, k]));
   const hotels = [], hotelIdx = new Map(), onDay = new Map();
@@ -760,6 +1002,35 @@ export async function POST(req) {
     return { date: str(d.date, 30), start: /^\d{1,2}:\d{2}$/.test(d.start) ? d.start : '08:00', ids, hotel };
   });
   const extra = stops.map((_, k) => k).filter(k => !onDay.has(k));
+
+  // ── Reshuffle: make every day fit its rules, then cheapest (no AI) ──
+  // Lowest cost = this engine; Cheapest (hotels only) stays below
+  if (body.mode === 'reshuffle' || (body.mode === 'cost' && !body.hotelsOnly)) {
+    if (!n) return NextResponse.json({ error: 'Add some places first.' }, { status: 400 });
+    const { cands, fixed, unpriced } = hotelOptions(body, days);
+    const fuel = body.fuel || {};
+    const gasPerKm = (num(fuel.pricePerL) || 65) / Math.max(1, num(fuel.kmPerL) || 10);
+    const backBy = hhmm(prefs.backBy) ?? 21 * 60;
+    const Mr = await driveMatrix([...stops, ...cands]);
+    const dayStarts = dayInfo.map(d => ({ ids: d.ids, start: hhmm(d.start) ?? 8 * 60 }));
+    // Today's plan with the same rules, for "before"
+    const candIdx = new Map(cands.map((c, h) => [c.uid, h]));
+    const nowNight = days.slice(0, Math.max(0, days.length - 1)).map(d => (candIdx.has(d.hotel) ? candIdx.get(d.hotel) : null));
+    const was = reshuffleBefore({ stops, days: dayStarts, cands, nights: nowNight, M: Mr, gasPerKm, backBy });
+    const res = reshuffle({ stops, days: dayStarts, cands, fixed, M: Mr, gasPerKm, backBy, extra });
+    const used = new Set(res.hotels);
+    const inPlan = new Set(res.days.flatMap(d => d.ids));
+    return NextResponse.json({
+      days: res.days.map((d, i) => ({ title: '', start: dayInfo[i].start, stops: d.ids.map(k => ({ uid: stops[k].uid, mins: stops[k].mins })) })),
+      hotels: cands.length ? res.hotels.map(h => (h == null ? null : cands[h].uid)) : undefined,
+      unscheduled: stops.filter((_, k) => !inPlan.has(k)).map(s => s.uid),
+      dropped: res.dropped.map(k => stops[k].uid),
+      late: res.days.map(d => d.late), lateBefore: was.late,
+      before: was.totals, after: res.totals, metric: 'cost', approx: Mr.approx,
+      unpriced, noPrice: cands.filter((c, h) => !c.nightly && used.has(h)).map(c => c.name),
+      mustMissed: cands.filter((c, h) => c.must && !used.has(h)).map(c => c.name),
+    });
+  }
 
   // ── Lowest cost: gas + one hotel per night (no AI) ──
   if (body.mode === 'cost') {
@@ -858,7 +1129,7 @@ Already on the wishlist: ${stops.map(s => `${s.name} (${s.area || 'Cebu'})`).joi
   const notes = str(prefs.note, 1500).trim();
   const peso = (v) => '₱' + Math.round(v).toLocaleString('en-PH');
   const wishText = stops.map((s, k) => `${label(k, n)} ${s.name} (${s.area || 'Cebu'}), about ${s.mins} min${s.must ? ', MUST-DO' : ''}${onDay.has(k) ? `, now on day ${onDay.get(k) + 1}` : ''}`).join('\n');
-  const dayText = dayInfo.map((d, i) => `Day ${i + 1} (${d.date})`).join('\n');
+  const dayText = dayInfo.map((d, i) => `Day ${i + 1} (${d.date}), leave ${d.start}`).join('\n');
   const hotelText = H.map((h, k) => `${label(n + k, n)} ${h.name} (${h.area || 'Cebu'}), ${h.nightly ? `${peso(h.nightly)}/night` : 'price unknown'}${h.must ? ', MUST-STAY' : ''}`).join('\n') || '(no hotel options)';
   const nightText = Array.from({ length: NN }, (_, i) => `Night ${i + 1} (after day ${i + 1}): ${opt.fixed[i] != null ? `${label(n + opt.fixed[i], n)} (fixed)` : `choose${nowNight[i] != null ? ` (now ${label(n + nowNight[i], n)})` : ''}`}`).join('\n');
   const matrixText = pointsAI.length > 1
@@ -868,7 +1139,7 @@ Already on the wishlist: ${stops.map(s => `${s.name} (${s.area || 'Cebu'})`).joi
   const prompt = `Traveller's notes:
 ${notes ? `---\n${notes}\n---` : '(none: plan a balanced trip)'}
 
-Group: ${Math.max(1, Math.round(num(body.people) || 2))} people. Gas costs about ${peso(gasPerKm)} per km.
+Group: ${Math.max(1, Math.round(num(body.people) || 2))} people. Gas costs about ${peso(gasPerKm)} per km. Back at the hotel by ${prefs.backBy || '21:00'} every day.
 
 Wishlist:
 ${wishText}
@@ -903,7 +1174,7 @@ ${matrixText}`;
       if (k != null) {
         if (used.has(k)) continue;
         used.add(k);
-        out[i].stops.push({ uid: stops[k].uid, mins, k });
+        out[i].stops.push({ uid: stops[k].uid, mins: stops[k].mins, k }); // your minutes, not the AI's
       } else {
         const name = str(s.name).trim();
         if (!name || names.has(name.toLowerCase())) continue;
@@ -934,6 +1205,20 @@ ${matrixText}`;
   const covered = (p) => new Set(p.hotels.filter(h => h != null && H[h].must)).size;
   if (covered(plan) < Math.min(musts, NN)) plan = solveH(opt.fixed); // AI skipped a must-stay → cheapest plan that includes it
 
+  // Does every day fit? If the AI left a day too long, fix it the exact way (move spots, then cheapest)
+  const rulesStops = finalStops.map(s => ({ ...s, when: s.when || 'any', keep: false }));
+  const startsAI = slotsAI.map(sl => ({ ids: sl.ids, start: hhmm(sl.start) ?? 8 * 60 }));
+  const lateAI = reshuffleBefore({ stops: rulesStops, days: startsAI, cands: H, nights: plan.hotels, M: M2, gasPerKm, backBy }).late;
+  let repaired = false;
+  if (lateAI.some(m => m > 0)) {
+    const fix = reshuffle({ stops: rulesStops, days: startsAI, cands: H, fixed: opt.fixed, M: M2, gasPerKm, backBy });
+    const byK = finalStops;
+    out.forEach((d, i) => { d.stops = fix.days[i].ids.map(k => { const s = byK[k]; return s.isNew ? s : { uid: s.uid, mins: s.mins, k: stops.findIndex(x => x.uid === s.uid) }; }); });
+    fix.dropped.forEach(k => { const s = byK[k]; if (!s.isNew) used.delete(stops.findIndex(x => x.uid === s.uid)); });
+    plan = { hotels: fix.hotels, totals: fix.totals, late: fix.days.map(d => d.late) };
+    repaired = true;
+  }
+
   // Before = today's plan (your order, your nights); after = the AI's plan with its hotels
   const costOf = (dayIds, nights, M, nStops, list) => {
     let km = 0, min = 0, stay = 0;
@@ -952,6 +1237,7 @@ ${matrixText}`;
     hotels: H.length ? plan.hotels.map(h => (h == null ? null : H[h].uid)) : undefined,
     unscheduled: stops.filter((_, k) => !used.has(k)).map(s => s.uid),
     before: was, after: plan.totals, metric: 'cost', approx: MA.approx || M2.approx,
+    late: plan.late || lateAI, repaired,
     unpriced: opt.unpriced,
     noPrice: H.filter((h, k) => !h.nightly && usedH.has(k)).map(h => h.name),
     mustMissed: H.filter((h, k) => h.must && !usedH.has(k)).map(h => h.name),
