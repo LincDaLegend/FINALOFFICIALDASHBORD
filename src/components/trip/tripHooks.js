@@ -24,92 +24,144 @@ function loadLocal() {
 
 const hasContent = (t) => !!(t && (t.pool?.length || t.hotels?.length));
 
+// ─── Three-way merge: apply what we changed (base → ours) on top of what's on the server (theirs) ──
+
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+const withUids = (a) => Array.isArray(a) && a.every(x => isObj(x) && x.uid);
+
+export function merge3(base, ours, theirs) {
+  if (same(ours, theirs)) return ours;
+  if (same(ours, base)) return theirs;   // only they changed it
+  if (same(theirs, base)) return ours;   // only we changed it
+  if (isObj(ours) && isObj(theirs)) {
+    const b = isObj(base) ? base : {};
+    const out = {};
+    for (const k of new Set([...Object.keys(theirs), ...Object.keys(ours)])) {
+      const v = merge3(b[k], ours[k], theirs[k]);
+      if (v !== undefined) out[k] = v;
+    }
+    return out;
+  }
+  if (withUids(ours) && withUids(theirs)) {
+    // Lists of places / hotels: keep everyone's additions, honour deletions, merge edits per item
+    const B = new Map((withUids(base) ? base : []).map(x => [x.uid, x]));
+    const O = new Map(ours.map(x => [x.uid, x]));
+    const T = new Set(theirs.map(x => x.uid));
+    const out = [];
+    for (const t of theirs) {
+      if (B.has(t.uid) && !O.has(t.uid)) continue; // we removed it
+      out.push(O.has(t.uid) ? merge3(B.get(t.uid), O.get(t.uid), t) : t);
+    }
+    for (const o of ours) if (!T.has(o.uid) && !B.has(o.uid)) out.push(o); // we added it
+    return out;
+  }
+  if (Array.isArray(ours) && Array.isArray(theirs) && Array.isArray(base) && ours.length === theirs.length && base.length === ours.length && ours.some(isObj)) {
+    return ours.map((o, i) => merge3(base[i], o, theirs[i])); // the days, one by one
+  }
+  return ours; // both changed the same thing: ours wins
+}
+
 /**
  * The trip, shared with everyone who has the link (via /api/shared), with this browser's copy as a cache.
  * Returns [trip, setTrip, sync] where sync.status is 'connecting' | 'live' | 'saving' | 'offline' | 'local'.
- * `onRemote(kind)` is called when someone else's edit replaces what's on screen ('update' | 'conflict').
+ * `onRemote(kind)` fires when someone else's edit reaches this page: 'update' or 'merged'.
  */
 export function useTrip({ onRemote } = {}) {
   const [trip, setTrip] = useState(loadLocal);
   const [status, setStatus] = useState('connecting');
   const [kick, setKick] = useState(0); // forces a save when this browser's plan seeds the shared one
   const etag = useRef(null);
-  const serverJson = useRef(null); // the trip as the server has it (JSON), so we only send real edits
+  const serverJson = useRef(null); // the trip as the server last had it, so we only send real edits
   const ready = useRef(false);
-  const pending = useRef(false);
+  const timer = useRef(null);
+  const inFlight = useRef(false);  // one save at a time, always with the newest version tag
   const latest = useRef(trip);
   const notify = useRef(onRemote);
   latest.current = trip;
   notify.current = onRemote;
+  const busy = () => inFlight.current || timer.current != null;
 
   useEffect(() => { try { localStorage.setItem(KEY, JSON.stringify(trip)); } catch {} }, [trip]);
 
-  const adopt = (data, tag) => {
-    const t = migrateTrip(data);
-    etag.current = tag;
-    serverJson.current = JSON.stringify(t);
-    setTrip(t);
-  };
+  const show = (t) => { latest.current = t; setTrip(t); };
 
   // Pull: first load, then every few seconds while the page is visible, and on focus
   useEffect(() => {
     let alive = true;
     const pull = async (first = false) => {
-      if (pending.current || document.hidden) return;
+      if (busy() || document.hidden) return;
       try {
-        const r = await fetch(api(), { cache: 'no-store', headers: etag.current ? { 'If-None-Match': etag.current } : {} });
+        const r = await fetch(api(), { cache: 'no-store', headers: etag.current ? { 'x-have': etag.current } : {} });
         if (!alive) return;
         if (r.status === 503) { setStatus('local'); return; }
-        if (r.status === 304) { setStatus('live'); return; }
         if (!r.ok) throw new Error();
         const d = await r.json();
-        if (!alive || pending.current) return;
-        const remote = d.data?.days?.length === DAYS ? d.data : null;
+        if (!alive || busy()) return;
+        if (d.unchanged) { setStatus('live'); return; }
+        const remote = d.data?.days?.length === DAYS ? migrateTrip(d.data) : null;
         const mine = latest.current;
+        etag.current = d.etag;
+        serverJson.current = remote ? JSON.stringify(remote) : null;
         if (first && !hasContent(remote) && hasContent(mine)) {
-          // Nothing shared yet: this browser's plan becomes the shared one
-          etag.current = d.etag; serverJson.current = remote ? JSON.stringify(migrateTrip(remote)) : null;
-          ready.current = true; setKick(k => k + 1); return;
-        } else if (remote) {
-          const json = JSON.stringify(migrateTrip(remote));
-          if (json !== JSON.stringify(mine)) {
-            if (first && hasContent(mine)) { try { localStorage.setItem(BACKUP_KEY, JSON.stringify(mine)); } catch {} }
-            adopt(remote, d.etag);
-            if (!first) notify.current?.('update');
-          } else { etag.current = d.etag; serverJson.current = json; }
-        } else { etag.current = d.etag; serverJson.current = null; }
+          ready.current = true; setKick(k => k + 1); return; // nothing shared yet: this browser's plan becomes the shared one
+        }
+        if (remote && serverJson.current !== JSON.stringify(mine)) {
+          if (first && hasContent(mine)) { try { localStorage.setItem(BACKUP_KEY, JSON.stringify(mine)); } catch {} }
+          show(remote);
+          if (!first) notify.current?.('update');
+        }
         ready.current = true;
         setStatus('live');
       } catch { if (alive) setStatus(s => (s === 'local' ? s : 'offline')); }
     };
     pull(true);
-    const id = setInterval(() => (ready.current ? pull() : pull(true)), POLL_MS);
-    const onFocus = () => (ready.current ? pull() : pull(true));
+    const id = setInterval(() => pull(!ready.current), POLL_MS);
+    const onFocus = () => pull(!ready.current);
     window.addEventListener('focus', onFocus);
     document.addEventListener('visibilitychange', onFocus);
     return () => { alive = false; clearInterval(id); window.removeEventListener('focus', onFocus); document.removeEventListener('visibilitychange', onFocus); };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Push: shortly after each edit
+  // Push: shortly after edits stop; if a save is still on its way, the next one waits for it
+  const flush = async () => {
+    timer.current = null;
+    if (inFlight.current || !ready.current) return;
+    const mine = latest.current;
+    const json = JSON.stringify(mine);
+    if (json === serverJson.current) { setStatus('live'); return; }
+    inFlight.current = true;
+    let again = false;
+    try {
+      const r = await fetch(api(), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: mine, etag: etag.current }) });
+      const d = await r.json().catch(() => ({}));
+      if (r.ok) {
+        etag.current = d.etag; serverJson.current = json;
+      } else if (r.status === 409 && d.data) {
+        // Someone else saved first: keep their changes and ours, then save the combination
+        const theirs = migrateTrip(d.data);
+        const base = serverJson.current ? JSON.parse(serverJson.current) : null;
+        etag.current = d.etag; serverJson.current = JSON.stringify(theirs);
+        show(migrateTrip(merge3(base, latest.current, theirs)));
+        notify.current?.('merged');
+      } else { setStatus(r.status === 503 ? 'local' : 'offline'); return; }
+      again = JSON.stringify(latest.current) !== serverJson.current;
+      setStatus(again ? 'saving' : 'live');
+    } catch { setStatus('offline'); }
+    finally {
+      inFlight.current = false;
+      if (again && !timer.current) timer.current = setTimeout(flush, 0);
+    }
+  };
+
   useEffect(() => {
-    if (!ready.current) return;
-    const json = JSON.stringify(trip);
-    if (json === serverJson.current) return;
-    pending.current = true;
+    if (!ready.current || JSON.stringify(trip) === serverJson.current) return;
     setStatus('saving');
-    const t = setTimeout(async () => {
-      try {
-        const r = await fetch(api(), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: trip, etag: etag.current }) });
-        const d = await r.json().catch(() => ({}));
-        if (r.ok) { etag.current = d.etag; serverJson.current = json; setStatus('live'); }
-        else if (r.status === 409 && d.data) { adopt(d.data, d.etag); setStatus('live'); notify.current?.('conflict'); }
-        else if (r.status === 503) setStatus('local');
-        else setStatus('offline');
-      } catch { setStatus('offline'); }
-      finally { pending.current = false; }
-    }, SAVE_MS);
-    return () => { clearTimeout(t); pending.current = false; };
-  }, [trip, kick]);
+    clearTimeout(timer.current);
+    timer.current = setTimeout(flush, SAVE_MS);
+  }, [trip, kick]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => () => clearTimeout(timer.current), []);
 
   return [trip, setTrip, { status }];
 }

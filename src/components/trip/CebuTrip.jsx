@@ -20,7 +20,7 @@ import ItineraryStep from './ItineraryStep.jsx';
 export default function CebuTrip() {
   const toast = useToast();
   const [trip, setTrip, sync] = useTrip({
-    onRemote: (kind) => toast(kind === 'conflict' ? 'Someone else edited at the same time · showing theirs' : 'Updated by someone else', <Users className="w-4 h-4 text-tint" aria-hidden />),
+    onRemote: (kind) => toast(kind === 'merged' ? 'Merged with someone else’s changes' : 'Updated by someone else', <Users className="w-4 h-4 text-tint" aria-hidden />),
   });
   const [step, setStep] = useState(() => (trip.pool.length ? (trip.days.some(d => d.stops.length) ? 'itinerary' : 'organize') : 'wish'));
   const [dayIdx, setDayIdx] = useState(0);

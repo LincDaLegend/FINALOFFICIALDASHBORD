@@ -1,5 +1,5 @@
 // Shared data for everyone with the link (Vercel Blob, private store).
-//   GET  /api/shared?key=trip          → { data, etag }   (If-None-Match → 304 when unchanged)
+//   GET  /api/shared?key=trip          → { data, etag }   (x-have: <etag> → { unchanged: true } when nothing changed)
 //   PUT  /api/shared?key=trip  { data, etag }  → { etag }  (409 + latest when someone else saved first)
 // No login on purpose: anyone who can open the site can read and edit these documents.
 import { NextResponse } from 'next/server';
@@ -29,8 +29,9 @@ export async function GET(req) {
   const key = keyOf(req);
   if (!key) return NextResponse.json({ error: 'unknown key' }, { status: 400 });
   try {
-    const r = await read(key, req.headers.get('if-none-match'));
-    if (r.status === 304) return new NextResponse(null, { status: 304, headers: { ETag: r.etag } });
+    // Vercel's edge eats If-None-Match, so the page sends the version it has as x-have
+    const r = await read(key, req.headers.get('x-have'));
+    if (r.status === 304) return NextResponse.json({ unchanged: true, etag: r.etag }, { headers: { 'Cache-Control': 'no-store' } });
     return NextResponse.json({ data: r.data, etag: r.etag }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (e) {
     return NextResponse.json({ error: e.message || 'Read failed' }, { status: 502 });
