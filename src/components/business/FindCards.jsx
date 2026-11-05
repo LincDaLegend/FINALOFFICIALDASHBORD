@@ -8,6 +8,7 @@ import {
   updateSettings, verdictOf, pricing, VERDICTS, RESULTS_BATCH,
 } from './stores.js';
 import { useWatchlist } from './watchlistHooks.js';
+import { SHOW_WATCHLIST } from './Layout.jsx';
 import { Page, Group, Row, Segmented, Switch, Button, Chip, EmptyState, useToast, SPRING } from './ui.jsx';
 
 const SUGGESTIONS = ['Victor Wembanyama', 'LeBron James Prizm', 'Stephen Curry', 'Luka Doncic'];
@@ -73,10 +74,10 @@ function ResultRow({ listing: l, settings, open, onToggle }) {
             <span className="block text-caption text-label-2 tabular">{usd(p.usd)}</span>
           </span>
         </button>
-        <button type="button" onClick={onWatch} aria-pressed={watched} aria-label={watched ? 'Remove from Watchlist' : 'Add to Watchlist'}
+        {SHOW_WATCHLIST && <button type="button" onClick={onWatch} aria-pressed={watched} aria-label={watched ? 'Remove from Watchlist' : 'Add to Watchlist'}
           className="w-12 shrink-0 flex items-center justify-center text-red pressable">
           <Heart className="w-[22px] h-[22px]" fill={watched ? 'currentColor' : 'none'} strokeWidth={2} aria-hidden />
-        </button>
+        </button>}
       </div>
 
       <AnimatePresence initial={false}>
@@ -124,10 +125,12 @@ function ResultRow({ listing: l, settings, open, onToggle }) {
               </div>
 
               <div className="flex gap-2 mt-3">
-                <Button variant={watched ? 'gray' : 'tinted'} className="flex-1" onClick={onWatch}>
-                  <Heart className="w-4 h-4" fill={watched ? 'currentColor' : 'none'} aria-hidden />
-                  {watched ? 'In Watchlist' : 'Add to Watchlist'}
-                </Button>
+                {SHOW_WATCHLIST && (
+                  <Button variant={watched ? 'gray' : 'tinted'} className="flex-1" onClick={onWatch}>
+                    <Heart className="w-4 h-4" fill={watched ? 'currentColor' : 'none'} aria-hidden />
+                    {watched ? 'In Watchlist' : 'Add to Watchlist'}
+                  </Button>
+                )}
                 {l.viewUrl && (
                   <a href={l.viewUrl} target="_blank" rel="noopener noreferrer"
                     className="inline-flex items-center justify-center gap-1.5 h-11 px-5 rounded-[12px] bg-fill text-label font-semibold pressable flex-1">
@@ -178,7 +181,7 @@ function PricingGroup({ settings }) {
   const [open, setOpen] = useState(false);
   const reduce = useReducedMotion();
   return (
-    <Group footer={open ? 'Used to turn eBay prices into pesos and suggest a selling price.' : undefined}>
+    <Group>
       <Row title="Pricing" onClick={() => setOpen(o => !o)}
         subtitle={`${settings.targetMarginPct}% profit goal · ₱${Math.round(settings.estShippingPhp)} shipping · $1 = ₱${settings.phpRate}`}>
         <ChevronDown className={`w-[17px] h-[17px] text-label-3 transition-transform duration-300 ease-apple ${open ? 'rotate-180' : ''}`} strokeWidth={2.5} aria-hidden />
@@ -222,7 +225,7 @@ export default function FindCards({ setActiveTab }) {
   const needsKeys = /App ID and Client Secret/i.test(s.error);
 
   return (
-    <Page title="Find Cards" subtitle="Live eBay listings, best deals first." wide>
+    <Page title="eBay Search" subtitle="Live eBay listings, best deals first." wide>
       {/* Search */}
       <div className="space-y-3">
         <form onSubmit={submit} role="search" className="flex gap-2">
@@ -267,10 +270,9 @@ export default function FindCards({ setActiveTab }) {
                   <Button key={q} size="sm" variant="gray" onClick={() => { setInput(q); runSearch(q); }}>{q}</Button>
                 ))}
               </div>
-              <Button size="sm" variant="plain" onClick={loadSampleCards}><Sparkles className="w-4 h-4" aria-hidden /> No eBay keys yet? Try sample cards</Button>
+              <Button size="sm" variant="plain" onClick={loadSampleCards}><Sparkles className="w-4 h-4" aria-hidden /> Try sample cards</Button>
             </div>
           }>
-          You’ll see each listing’s price in pesos and whether it’s worth buying.
         </EmptyState>
       )}
 
@@ -317,7 +319,7 @@ export default function FindCards({ setActiveTab }) {
 
           {s.market?.price ? (
             <Group header={s.sample ? 'Market' : `Market · ${s.query}`}
-              footer={s.market.fromSales ? undefined : 'No sold-price data, so listings are compared with each other. Add a RapidAPI key in Settings for real sold prices.'}>
+              footer={s.market.fromSales ? undefined : 'No sold-price data. Add a RapidAPI key in Settings.'}>
               <div className="px-4 py-3.5 flex items-end justify-between gap-4">
                 <div>
                   <p className="text-footnote text-label-2">{s.market.fromSales ? 'Recently sold for about' : 'Listed for about'}</p>

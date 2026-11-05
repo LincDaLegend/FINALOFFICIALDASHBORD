@@ -1,9 +1,9 @@
 import './globals.css';
 
 export const metadata = {
-  title: 'Baller — Card Finder',
+  title: 'API Tests',
   description: 'Find basketball cards on eBay and see which ones are worth buying.',
-  appleWebApp: { capable: true, title: 'Baller', statusBarStyle: 'default' },
+  appleWebApp: { capable: true, title: 'API Tests', statusBarStyle: 'default' },
 };
 
 export const viewport = {

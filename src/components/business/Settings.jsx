@@ -32,7 +32,7 @@ function FieldRow({ label, value, onSave, placeholder, secret }) {
 }
 
 function useKeyStatus(settings) {
-  const [status, setStatus] = useState({ ebay: null, rapid: null });
+  const [status, setStatus] = useState({ ebay: null, rapid: null, ai: null });
   useEffect(() => {
     let live = true;
     const headers = {};
@@ -42,8 +42,10 @@ function useKeyStatus(settings) {
     fetch('/api/ebay/search', { headers }).then(r => live && setStatus(s => ({ ...s, ebay: r.ok }))).catch(() => {});
     fetch('/api/ebay/sold?q=', { headers: settings.rapidApiKey ? { 'x-rapidapi-key': settings.rapidApiKey } : {} })
       .then(r => r.json()).then(d => live && setStatus(s => ({ ...s, rapid: d?.error !== 'no apiKey' }))).catch(() => {});
+    fetch('/api/trip?kind=ai', { headers: settings.anthropicKey ? { 'x-anthropic-key': settings.anthropicKey } : {} })
+      .then(r => r.json()).then(d => live && setStatus(s => ({ ...s, ai: d }))).catch(() => {});
     return () => { live = false; };
-  }, [settings.ebayKey, settings.ebaySecret, settings.rapidApiKey]);
+  }, [settings.ebayKey, settings.ebaySecret, settings.rapidApiKey, settings.anthropicKey]);
   return status;
 }
 
@@ -94,7 +96,7 @@ export default function Settings({ data, update }) {
           },
         });
       } catch {
-        toast('That file isn’t a Baller backup', <CircleAlert className="w-4 h-4 text-orange" aria-hidden />);
+        toast('That file isn’t an API Tests backup', <CircleAlert className="w-4 h-4 text-orange" aria-hidden />);
       }
     };
     reader.readAsText(file);
@@ -104,10 +106,8 @@ export default function Settings({ data, update }) {
     <Page title="Settings">
       <Group header="eBay"
         footer={<>
-          <Status ok={status.ebay} yes="Search is ready." no="Search needs both keys." />{' '}
-          Get them free at{' '}
-          <a href="https://developer.ebay.com/my/keys" target="_blank" rel="noopener noreferrer" className="text-tint-ink">developer.ebay.com</a>
-          {' '}→ Application Keys → Production. Stored only in this browser.
+          <Status ok={status.ebay} yes="Ready." no="Both keys needed." />{' '}
+          <a href="https://developer.ebay.com/my/keys" target="_blank" rel="noopener noreferrer" className="text-tint-ink">Get keys</a>
         </>}>
         <FieldRow label="App ID" placeholder="Required" value={settings.ebayKey} onSave={v => save({ ebayKey: v })} />
         <FieldRow label="Client Secret" placeholder="Required" secret value={settings.ebaySecret} onSave={v => save({ ebaySecret: v })} />
@@ -115,21 +115,28 @@ export default function Settings({ data, update }) {
 
       <Group header="Sold Prices"
         footer={<>
-          <Status ok={status.rapid} yes="Using real sold prices." no="Optional — makes deal scores more accurate." />{' '}
-          Subscribe to{' '}
-          <a href="https://rapidapi.com/ecommet/api/ebay-average-selling-price" target="_blank" rel="noopener noreferrer" className="text-tint-ink">eBay Average Selling Price</a>
-          {' '}on RapidAPI and paste the key.
+          <Status ok={status.rapid} yes="Ready." no="Optional." />{' '}
+          <a href="https://rapidapi.com/ecommet/api/ebay-average-selling-price" target="_blank" rel="noopener noreferrer" className="text-tint-ink">Get a key</a>
         </>}>
         <FieldRow label="RapidAPI Key" placeholder="Optional" secret value={settings.rapidApiKey} onSave={v => save({ rapidApiKey: v })} />
       </Group>
 
-      <Group header="Pricing" footer="Used to turn eBay prices into pesos and suggest what to sell each card for.">
+      <Group header="Claude (AI)"
+        footer={<>
+          {status.ai && <><Status ok={status.ai.ok} yes="Ready."
+            no={status.ai.code === 'bad_key' ? 'Key rejected.' : status.ai.code === 'unreachable' ? 'Can’t reach Claude.' : 'Needed for AI.'} />{' '}</>}
+          <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener noreferrer" className="text-tint-ink">Get a key</a>
+        </>}>
+        <FieldRow label="API Key" placeholder="sk-ant-…" secret value={settings.anthropicKey} onSave={v => save({ anthropicKey: v })} />
+      </Group>
+
+      <Group header="Pricing">
         <NumberRow label="Profit goal" suffix="%" value={settings.targetMarginPct} onCommit={n => save({ targetMarginPct: n })} />
         <NumberRow label="Shipping to your buyer" prefix="₱" value={settings.estShippingPhp} onCommit={n => save({ estShippingPhp: n })} />
         <NumberRow label="Exchange rate" prefix="$1 = ₱" step={0.1} value={settings.phpRate} onCommit={n => save({ phpRate: n })} />
       </Group>
 
-      <Group header="Backup" footer="Your watchlist and settings live in this browser. Download a backup to move them or keep them safe.">
+      <Group header="Backup" footer="Saved in this browser only.">
         <Row title="Download Backup" tint onClick={exportData} />
         <Row title="Restore from Backup…" tint onClick={() => fileRef.current?.click()} />
         <input ref={fileRef} type="file" accept=".json,application/json" onChange={importData} className="hidden" />

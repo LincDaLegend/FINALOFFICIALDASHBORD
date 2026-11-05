@@ -1,18 +1,22 @@
 'use client';
 
-import { Search, Heart, Settings } from 'lucide-react';
+import { Search, Heart, Settings, Plane, FlaskConical } from 'lucide-react';
+
+// Watchlist is hidden for now; set SHOW_WATCHLIST to true to bring it back (page + hearts)
+export const SHOW_WATCHLIST = false;
 
 export const TABS = [
-  { id: 'search',    label: 'Find Cards',  icon: Search },
-  { id: 'watchlist', label: 'Watchlist',   icon: Heart },
+  { id: 'search',    label: 'eBay Search', icon: Search },
+  ...(SHOW_WATCHLIST ? [{ id: 'watchlist', label: 'Watchlist', icon: Heart }] : []),
+  { id: 'trip',      label: 'Cebu Trip',   icon: Plane }, // temporary
   { id: 'settings',  label: 'Settings',    icon: Settings },
 ];
 
 function AppMark() {
   return (
-    <span className="w-8 h-8 rounded-[9px] flex items-center justify-center text-white text-[17px] shadow-sm"
-      style={{ background: 'linear-gradient(160deg, #FF9F0A, #FF453A)' }} aria-hidden>
-      🏀
+    <span className="w-8 h-8 rounded-[9px] flex items-center justify-center text-white shadow-sm"
+      style={{ background: 'linear-gradient(160deg, #0A84FF, #5E5CE6)' }} aria-hidden>
+      <FlaskConical className="w-[18px] h-[18px]" strokeWidth={2.2} />
     </span>
   );
 }
@@ -24,7 +28,7 @@ export default function Layout({ activeTab, setActiveTab, watchCount, children }
       <aside className="hidden lg:flex fixed inset-y-0 left-0 w-[260px] flex-col material-sidebar shadow-[inset_-0.5px_0_0_var(--separator)]">
         <div className="flex items-center gap-2.5 px-5 pt-7 pb-6">
           <AppMark />
-          <span className="text-title-2">Baller</span>
+          <span className="text-title-2">API Tests</span>
         </div>
         <nav aria-label="Main" className="px-3 space-y-0.5">
           {TABS.map(({ id, label, icon: Icon }) => {
@@ -49,8 +53,8 @@ export default function Layout({ activeTab, setActiveTab, watchCount, children }
 
       {/* Tab bar — phone / small tablet */}
       <nav aria-label="Main"
-        className="lg:hidden fixed inset-x-0 bottom-0 z-30 material-bar shadow-[0_-0.5px_0_var(--bar-edge)] grid grid-cols-3"
-        style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
+        className="lg:hidden fixed inset-x-0 bottom-0 z-30 material-bar shadow-[0_-0.5px_0_var(--bar-edge)] grid"
+        style={{ gridTemplateColumns: `repeat(${TABS.length}, minmax(0, 1fr))`, paddingBottom: 'env(safe-area-inset-bottom)' }}>
         {TABS.map(({ id, label, icon: Icon }) => {
           const on = activeTab === id;
           return (

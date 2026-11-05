@@ -26,7 +26,8 @@ Every key can be set in **either** of two places:
 | `EBAY_APP_ID` | Search (required) | [developer.ebay.com/my/keys](https://developer.ebay.com/my/keys) → Production → **App ID (Client ID)** |
 | `EBAY_CLIENT_SECRET` | Search (required) | Same page → **Cert ID (Client Secret)** |
 | `RAPIDAPI_KEY` | Sold prices (recommended) | See [Sold prices](#sold-prices-rapidapi) below |
-| `ANTHROPIC_API_KEY` | Optional AI helpers | [console.anthropic.com](https://console.anthropic.com/) |
+| `ANTHROPIC_API_KEY` | AI trip optimisation (optional) | [console.anthropic.com](https://console.anthropic.com/settings/keys) → API Keys. Can also be pasted in **Settings → Claude (AI)** |
+| `BLOB_READ_WRITE_TOKEN` | Shared Cebu trip (everyone with the link sees and edits it) | Vercel → Storage → Blob → create a **private** store and connect it to the project; it adds this variable. Without it the trip stays on each device |
 
 Search fails with *"eBay App ID and Client Secret are both required"* until both eBay keys are set.
 

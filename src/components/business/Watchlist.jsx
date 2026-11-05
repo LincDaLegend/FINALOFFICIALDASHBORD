@@ -95,14 +95,13 @@ export default function Watchlist({ setActiveTab }) {
       <Page title="Watchlist">
         <EmptyState icon={<Heart className="w-6 h-6" aria-hidden />} title="Nothing saved yet"
           action={<Button onClick={() => setActiveTab('search')}><Search className="w-4 h-4" aria-hidden /> Find Cards</Button>}>
-          Tap the heart on any card in Find Cards to keep an eye on it here.
         </EmptyState>
       </Page>
     );
   }
 
   return (
-    <Page title="Watchlist" subtitle="Prices are from when you saved each card.">
+    <Page title="Watchlist">
       <Group>
         <div className="grid grid-cols-3 divide-x divide-[var(--separator)] py-3">
           {[

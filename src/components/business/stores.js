@@ -25,7 +25,7 @@ const useStore = (store) => useSyncExternalStore(store.subscribe, store.get, sto
 // ─── Settings ────────────────────────────────────────────────────────────────
 // Lives in the scoring code's own state (persisted to localStorage), so search uses it directly.
 
-const SETTING_KEYS = ['ebayKey', 'ebaySecret', 'rapidApiKey', 'phpRate', 'targetMarginPct', 'estShippingPhp'];
+const SETTING_KEYS = ['ebayKey', 'ebaySecret', 'rapidApiKey', 'anthropicKey', 'phpRate', 'targetMarginPct', 'estShippingPhp'];
 const readSettings = () => Object.fromEntries(SETTING_KEYS.map(k => [k, state[k]]));
 
 export const settingsStore = createStore(readSettings());

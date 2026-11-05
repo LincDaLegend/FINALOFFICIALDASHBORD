@@ -6,13 +6,14 @@ import Layout, { TABS } from './Layout.jsx';
 import FindCards from './FindCards.jsx';
 import Watchlist from './Watchlist.jsx';
 import Settings from './Settings.jsx';
+import CebuTrip from '../trip/CebuTrip.jsx'; // temporary
 import { ToastProvider } from './ui.jsx';
 import { useBusinessStore } from './store.js';
 import { useWatchlist } from './watchlistHooks.js';
 
 const isTab = (id) => TABS.some(t => t.id === id);
 
-// The URL hash names the page, so Back and bookmarks work. Opens on Find Cards.
+// The URL hash names the page, so Back and bookmarks work. Opens on eBay Search.
 function initialTab() {
   const hash = window.location.hash.slice(1);
   return isTab(hash) ? hash : 'search';
@@ -40,6 +41,7 @@ export default function BusinessApp() {
   const page = {
     search:    <FindCards setActiveTab={setActiveTab} />,
     watchlist: <Watchlist setActiveTab={setActiveTab} />,
+    trip:      <CebuTrip />,
     settings:  <Settings data={data} update={update} />,
   }[activeTab];
 
