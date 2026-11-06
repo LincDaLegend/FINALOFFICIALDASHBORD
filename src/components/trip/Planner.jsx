@@ -344,7 +344,8 @@ function DayColumn({ trip, i, info, height, y, backBy, ops, dnd }) {
   };
   const lastStop = stops[stops.length - 1];
   const lineY = over && over.index != null ? (stops[over.index] ? stops[over.index].top - 2 : (lastStop ? lastStop.top + lastStop.h + 2 : y(info.ends) + 2)) : null;
-  const emptyNightY = Math.max(y(Math.max(info.ends, toMin(d.start))), info.bottom) + 8;
+  // An empty day shows "Drag places here" at its leave time, so the night slot goes below that box
+  const emptyNightY = d.stops.length ? Math.max(y(info.ends), info.bottom) + 8 : y(toMin(d.start)) + 64;
 
   return (
     <div onDragOver={onOver} onDrop={onDrop} onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) dnd.setOver(null); }}
