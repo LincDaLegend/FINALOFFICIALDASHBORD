@@ -13,7 +13,7 @@
 import { NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
 
-const UA = 'BallerTripPlanner/1.0 (personal itinerary tool)';
+const UA = 'BallerTripPlanner/1.0 (https://baller-dashboard-one.vercel.app; personal itinerary tool)'; // Wikimedia + OSM ask for a contact URL
 const CEBU_VIEWBOX = '123.25,11.40,124.20,9.40'; // left,top,right,bottom; also catches Bohol/Negros, so results are filtered too
 
 const cache = new Map();
@@ -21,7 +21,7 @@ const nextSlot = new Map(); // host → earliest time the next request may start
 // OSM's free servers ask for ≤1 request/second; Wikimedia is fine with a short gap
 const GAP = { 'en.wikipedia.org': 150, 'commons.wikimedia.org': 150 };
 
-async function politeFetch(url) {
+async function politeFetch(url, tries = 3) {
   if (cache.has(url)) return cache.get(url);
   const host = new URL(url).host;
   const now = Date.now();
@@ -29,6 +29,12 @@ async function politeFetch(url) {
   nextSlot.set(host, start + (GAP[host] ?? 1100));
   if (start > now) await new Promise(r => setTimeout(r, start - now));
   const res = await fetch(url, { headers: { 'User-Agent': UA, 'Accept-Language': 'en' }, cache: 'no-store', signal: AbortSignal.timeout(15000) });
+  if (res.status === 429 && tries > 1) {
+    // Too many at once: back off (as asked, or 1.5 s, then 3 s) and slow this host down for everyone
+    const wait = Math.min(5000, (Number(res.headers.get('retry-after')) || 0) * 1000 || (4 - tries) * 1500);
+    nextSlot.set(host, Math.max(nextSlot.get(host) || 0, Date.now() + wait));
+    return politeFetch(url, tries - 1);
+  }
   if (!res.ok) throw new Error(`${host} answered ${res.status}`);
   const data = await res.json();
   cache.set(url, data);
@@ -207,6 +213,33 @@ async function photo({ name, area, lat, lon, wiki }) {
     if (pick) return { url: pick.pg.imageinfo[0].thumburl, page: pick.pg.imageinfo[0].descriptionurl, source: 'Wikimedia Commons' };
   } catch {}
   return { url: null };
+}
+
+/** A short Wikipedia summary for a place: its OSM-linked article, or a nearby article with the same name. */
+async function about({ name, lat, lon, wiki }) {
+  const summary = async (lang, title) => {
+    const d = await politeFetch(`https://${lang}.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title.replace(/ /g, '_'))}`);
+    if (!d?.extract || d.type === 'disambiguation') return null;
+    return {
+      title: d.title, description: d.description || null, extract: d.extract.slice(0, 1200),
+      page: d.content_urls?.desktop?.page || null, photo: d.thumbnail?.source ? bigger(d.thumbnail.source) : null, source: 'Wikipedia',
+    };
+  };
+  // A missing article is an answer ("nothing found"); any other failure is thrown so the browser asks again later
+  const missing = (e) => { if (!/answered 404/.test(e?.message || '')) throw e; return null; };
+  if (wiki) {
+    const [lang, ...rest] = wiki.includes(':') ? wiki.split(':') : ['en', wiki];
+    const r = await summary(/^[a-z-]{2,12}$/.test(lang) ? lang : 'en', rest.join(':')).catch(missing);
+    if (r) return r;
+  }
+  const words = keyWords(name);
+  if (words.length) {
+    const d = await politeFetch(`https://en.wikipedia.org/w/api.php?action=query&list=geosearch&gscoord=${lat}%7C${lon}&gsradius=5000&gslimit=30&format=json`);
+    const best = (d.query?.geosearch || []).map(pg => ({ pg, score: matchScore(words, pg.title) }))
+      .filter(x => x.score > 0).sort((a, b) => b.score - a.score || a.pg.dist - b.pg.dist)[0];
+    if (best) { const r = await summary('en', best.pg.title).catch(missing); if (r) return r; }
+  }
+  return { extract: null };
 }
 
 // ─── Shortest route (no AI) ──────────────────────────────────────────────────
@@ -776,7 +809,13 @@ export async function GET(req) {
       const found = await photo({ name: (p.get('name') || '').slice(0, 120), area: (p.get('area') || '').slice(0, 80), lat, lon, wiki: (p.get('wiki') || '').slice(0, 200) });
       return NextResponse.json(found, { headers: { 'Cache-Control': 'public, max-age=86400' } });
     }
-    return NextResponse.json({ error: 'kind must be places, stays, drive or ai' }, { status: 400 });
+    if (kind === 'about') {
+      const lat = Number(p.get('lat')), lon = Number(p.get('lon'));
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) return NextResponse.json({ error: 'lat and lon are required' }, { status: 400 });
+      const found = await about({ name: (p.get('name') || '').slice(0, 120), lat, lon, wiki: (p.get('wiki') || '').slice(0, 200) });
+      return NextResponse.json(found, { headers: { 'Cache-Control': 'public, max-age=86400' } });
+    }
+    return NextResponse.json({ error: 'kind must be places, stays, drive, photo, about or ai' }, { status: 400 });
   } catch (e) {
     return NextResponse.json({ error: e.message || 'Lookup failed' }, { status: 502 });
   }

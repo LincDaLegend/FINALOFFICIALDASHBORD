@@ -8,6 +8,7 @@ import './trip.css';
 import { X, Car, BedDouble, Ship, Loader2, PiggyBank, ExternalLink, Inbox, CalendarClock, Lock, LockOpen, Plus, MapPin, Clock } from 'lucide-react';
 import { Segmented, Button, useToast } from '../business/ui.jsx';
 import { DAYS, schedule, fmtClock, fmtDur, peso, addDays, placesById, stayOf, nightlyFor, bookingLinks, colorOf, hasSpot, asEntry } from './tripData.js';
+import PlaceInfo from './PlaceInfo.jsx';
 import { PlacePhoto, MustStar, HotelForm, PriceCell, DurationPick, postTrip, tripPayload, fmtDay, fmtKm, useGeocode, GeoPick } from './tripUi.jsx';
 
 const TripMap = dynamic(() => import('./TripMap.jsx'), {
@@ -32,23 +33,28 @@ export default function Planner({ trip, setTrip, ops, routes }) {
   const end = () => { setDrag(null); setOver(null); };
   const dnd = { drag, over, setOver, start, end };
   const [entryFor, setEntryFor] = useState(null); // { day, n }: a day's "+" opens the entry form for that day
+  const [info, setInfo] = useState(null); // { kind: 'place' | 'hotel', uid }: the details sheet
+  const onOpen = (kind, uid) => setInfo({ kind, uid });
+  const infoItem = info && (info.kind === 'hotel' ? (trip.hotels || []).find(h => h.uid === info.uid) : trip.pool.find(p => p.uid === info.uid));
 
   return (
     <div className="space-y-5">
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-[300px_minmax(0,1fr)] items-start">
         <div className="lg:sticky lg:top-5">
-          <Pool trip={trip} setTrip={setTrip} ops={ops} dnd={dnd} entryFor={entryFor} />
+          <Pool trip={trip} setTrip={setTrip} ops={ops} dnd={dnd} entryFor={entryFor} onOpen={onOpen} />
         </div>
-        <Timetable trip={trip} ops={ops} routes={routes} dnd={dnd} onAddEntry={(day) => setEntryFor(e => ({ day, n: (e?.n || 0) + 1 }))} />
+        <Timetable trip={trip} ops={ops} routes={routes} dnd={dnd} onOpen={onOpen} onAddEntry={(day) => setEntryFor(e => ({ day, n: (e?.n || 0) + 1 }))} />
       </div>
       <MapCard trip={trip} ops={ops} routes={routes} />
+      <PlaceInfo open={!!infoItem} onClose={() => setInfo(null)} trip={trip} ops={ops} item={infoItem} kind={info?.kind}
+        when={info?.kind === 'place' && infoItem ? whereIs(trip, routes, infoItem.uid) : null} />
     </div>
   );
 }
 
 // ─── Pool ────────────────────────────────────────────────────────────────────
 
-function Pool({ trip, setTrip, ops, dnd, entryFor }) {
+function Pool({ trip, setTrip, ops, dnd, entryFor, onOpen }) {
   const toast = useToast();
   const [busy, setBusy] = useState(false);
   const [near, setNear] = useState('');
@@ -109,11 +115,13 @@ function Pool({ trip, setTrip, ops, dnd, entryFor }) {
               <li key={p.uid} draggable onDragStart={dnd.start({ kind: 'place', id: p.uid, from: 'pool' })} onDragEnd={dnd.end}
                 className={`rounded-[12px] bg-fill p-2 cursor-grab active:cursor-grabbing transition-opacity ${dnd.drag?.id === p.uid ? 'opacity-40' : ''}`}>
                 <div className="flex items-center gap-2.5">
-                  <PlacePhoto place={p} className="w-10 h-10 rounded-[9px]" iconSize={18} lookup={!p.custom} />
-                  <span className="min-w-0 flex-1">
-                    <span className="block text-subhead font-semibold leading-snug line-clamp-2">{p.name}</span>
-                    {p.custom && <span className="block text-footnote text-label-2 truncate">{hasSpot(p) ? p.area || 'Own place' : 'Where you are'}</span>}
-                  </span>
+                  <button type="button" onClick={() => onOpen('place', p.uid)} aria-label={`Details: ${p.name}`} className="min-w-0 flex-1 flex items-center gap-2.5 text-left rounded-[9px] hover:opacity-80">
+                    <PlacePhoto place={p} className="w-10 h-10 rounded-[9px]" iconSize={18} lookup={!p.custom} />
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-subhead font-semibold leading-snug line-clamp-2">{p.name}</span>
+                      {p.custom && <span className="block text-footnote text-label-2 truncate">{hasSpot(p) ? p.area || 'Own place' : 'Where you are'}</span>}
+                    </span>
+                  </button>
                   <button type="button" onClick={() => ops.remove(p.uid)} aria-label={`Remove ${p.name}`}
                     className="w-7 h-7 flex items-center justify-center text-label-3 hover:text-red-ink pressable shrink-0"><X className="w-4 h-4" aria-hidden /></button>
                 </div>
@@ -142,8 +150,10 @@ function Pool({ trip, setTrip, ops, dnd, entryFor }) {
               {scheduled.map(({ p, day }) => (
                 <li key={p.uid} draggable onDragStart={dnd.start({ kind: 'place', id: p.uid, from: day })} onDragEnd={dnd.end}
                   className={`flex items-center gap-2 rounded-[10px] bg-fill/60 p-1.5 pl-2 cursor-grab active:cursor-grabbing transition-opacity ${dnd.drag?.id === p.uid ? 'opacity-40' : ''}`}>
-                  <PlacePhoto place={p} className="w-7 h-7 rounded-[7px]" iconSize={14} />
-                  <span className="min-w-0 flex-1 text-subhead truncate">{p.name}</span>
+                  <button type="button" onClick={() => onOpen('place', p.uid)} aria-label={`Details: ${p.name}`} className="min-w-0 flex-1 flex items-center gap-2 text-left hover:opacity-80">
+                    <PlacePhoto place={p} className="w-7 h-7 rounded-[7px]" iconSize={14} />
+                    <span className="min-w-0 flex-1 text-subhead truncate">{p.name}</span>
+                  </button>
                   <select value={day} onChange={e => ops.move(p.uid, e.target.value === '' ? null : +e.target.value)} aria-label={`Day for ${p.name}`}
                     className="h-7 w-[70px] pl-1.5 rounded-[8px] bg-surface text-footnote font-semibold text-label outline-none focus:ring-2 focus:ring-tint cursor-pointer">
                     {trip.days.map((_, i) => <option key={i} value={i}>Day {i + 1}</option>)}
@@ -167,11 +177,13 @@ function Pool({ trip, setTrip, ops, dnd, entryFor }) {
                 <li key={h.uid} draggable onDragStart={dnd.start({ kind: 'hotel', id: h.uid, from: 'pool' })} onDragEnd={dnd.end}
                   className="rounded-[12px] bg-fill p-2 cursor-grab active:cursor-grabbing">
                   <div className="flex items-center gap-2">
-                    <span className="w-10 h-10 rounded-[9px] bg-[#5856D6] text-white flex items-center justify-center shrink-0"><BedDouble className="w-5 h-5" aria-hidden /></span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block text-subhead font-semibold leading-snug truncate">{h.name}</span>
-                      <span className="block text-footnote text-label-2 truncate">{n.length ? `Night ${n.join(', ')}` : 'Not used'}{h.address ? ` · ${h.address}` : ''}</span>
-                    </span>
+                    <button type="button" onClick={() => onOpen('hotel', h.uid)} aria-label={`Details: ${h.name}`} className="min-w-0 flex-1 flex items-center gap-2 text-left hover:opacity-80">
+                      <span className="w-10 h-10 rounded-[9px] bg-[#5856D6] text-white flex items-center justify-center shrink-0"><BedDouble className="w-5 h-5" aria-hidden /></span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-subhead font-semibold leading-snug truncate">{h.name}</span>
+                        <span className="block text-footnote text-label-2 truncate">{n.length ? `Night ${n.join(', ')}` : 'Not used'}{h.address ? ` · ${h.address}` : ''}</span>
+                      </span>
+                    </button>
                     <button type="button" onClick={() => ops.removeHotel(h.uid)} aria-label={`Remove ${h.name}`}
                       className="w-7 h-7 flex items-center justify-center text-label-3 hover:text-red-ink pressable shrink-0"><X className="w-4 h-4" aria-hidden /></button>
                   </div>
@@ -236,6 +248,21 @@ function entriesOf(trip, i, route) {
   return { entries: out, ends, loading: route.loading };
 }
 
+/** Day, times and the drive in for a scheduled place (null if it's not on a day). */
+function whereIs(trip, routes, uid) {
+  const day = trip.days.findIndex(d => d.stops.includes(uid));
+  if (day < 0) return null;
+  const { entries } = entriesOf(trip, day, routes[day]);
+  const k = entries.findIndex(e => e.type === 'stop' && e.place.uid === uid);
+  if (k < 0) return null;
+  const e = entries[k], tr = entries[k - 1]?.type === 'travel' ? entries[k - 1] : null, prev = tr ? entries[k - 2] : null;
+  const backBy = toMin(trip.prefs.backBy || '21:00');
+  return {
+    day, from: e.from, to: e.to, late: e.to > backBy || e.behind > 0,
+    travel: tr && tr.leg.min >= 1 ? { min: tr.leg.min, km: tr.leg.km - (tr.leg.ferryKm || 0), ferry: tr.leg.ferryKm > 0.5, from: prev?.place?.name || prev?.hotel?.name || 'the last stop' } : null,
+  };
+}
+
 const LEAVE_H = 22, STOP_MIN_H = 30, NIGHT_H = 44, TRAVEL_MIN_H = 22, GAP = 2;
 
 /**
@@ -271,7 +298,7 @@ function layoutDay(entries, y, freeDay, start) {
   return { laid: out, bottom: cursor };
 }
 
-function Timetable({ trip, ops, routes, dnd, onAddEntry }) {
+function Timetable({ trip, ops, routes, dnd, onAddEntry, onOpen }) {
   const backBy = toMin(trip.prefs.backBy || '21:00');
   const days = trip.days.map((_, i) => entriesOf(trip, i, routes[i]));
   const first = Math.min(...trip.days.map(d => toMin(d.start)), 7 * 60);
@@ -305,7 +332,7 @@ function Timetable({ trip, ops, routes, dnd, onAddEntry }) {
 
           {/* One column per day */}
           {trip.days.map((d, i) => (
-            <DayColumn key={i} trip={trip} i={i} info={days[i]} height={height} y={y} backBy={backBy} ops={ops} dnd={dnd} />
+            <DayColumn key={i} trip={trip} i={i} info={days[i]} height={height} y={y} backBy={backBy} ops={ops} dnd={dnd} onOpen={onOpen} />
           ))}
         </div>
       </div>
@@ -339,7 +366,7 @@ function DayHead({ trip, i, info, backBy, ops, onAddEntry }) {
   );
 }
 
-function DayColumn({ trip, i, info, height, y, backBy, ops, dnd }) {
+function DayColumn({ trip, i, info, height, y, backBy, ops, dnd, onOpen }) {
   const d = trip.days[i];
   const isLast = i === DAYS - 1;
   const stops = info.laid.filter(e => e.type === 'stop');
@@ -406,7 +433,7 @@ function DayColumn({ trip, i, info, height, y, backBy, ops, dnd }) {
             onPin={() => ops.togglePin(i)} onClear={() => ops.setNight(i, null)}
             onDragStart={dnd.start({ kind: 'hotel', id: e.hotel.uid, from: i })} onDragEnd={dnd.end} />
         );
-        return <StopBlock key={e.place.uid} e={e} i={i} late={e.to > backBy || e.behind > 0} ops={ops} dnd={dnd} />;
+        return <StopBlock key={e.place.uid} e={e} i={i} late={e.to > backBy || e.behind > 0} ops={ops} dnd={dnd} onOpen={onOpen} />;
       })}
 
       {!isLast && !night && (
@@ -418,7 +445,7 @@ function DayColumn({ trip, i, info, height, y, backBy, ops, dnd }) {
   );
 }
 
-function StopBlock({ e, i, late, ops, dnd }) {
+function StopBlock({ e, i, late, ops, dnd, onOpen }) {
   const p = e.place;
   const h = e.h;
   const roomy = h >= 84; // tall enough to show its controls; shorter blocks show them on hover / tap
@@ -432,7 +459,8 @@ function StopBlock({ e, i, late, ops, dnd }) {
       <div className="pl-2.5 pr-1 py-1">
         <div className="flex items-start gap-1">
           <span className="min-w-0 flex-1">
-            <span className={`block text-footnote font-semibold leading-tight ${roomy ? 'line-clamp-2' : 'truncate'}`}>{p.name}</span>
+            <button type="button" onClick={() => onOpen('place', p.uid)} title="Details"
+              className={`block w-full text-left text-footnote font-semibold leading-tight hover:text-tint-ink ${roomy ? 'line-clamp-2' : 'truncate'}`}>{p.name}</button>
             <span className={`flex items-center gap-0.5 text-[11px] tabular whitespace-nowrap ${late ? 'text-red-ink font-semibold' : 'text-label-2'}`}
               title={p.at ? (e.behind ? `Set for ${fmtClock(toMin(p.at))}: ${fmtDur(e.behind)} late` : `Set for ${fmtClock(toMin(p.at))}`) : undefined}>
               {p.at && <Clock className="w-3 h-3 shrink-0" aria-label="Fixed time" />}{fmtRange(e.from, e.to)}

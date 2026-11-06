@@ -43,3 +43,12 @@
 }
 /* The timetable scrolls sideways on its own, without dragging the page or triggering back-swipe */
 .trip-timetable { overscroll-behavior-x: contain; }
+
+/* Details sheet: slides up on phones, rises gently on larger screens */
+.trip-sheet[open] { animation: trip-sheet-in 0.34s cubic-bezier(0.32, 0.72, 0, 1); }
+.trip-sheet[open]::backdrop { animation: trip-fade 0.25s ease-out; }
+@keyframes trip-sheet-in { from { transform: translateY(32px); opacity: 0; } }
+@keyframes trip-fade { from { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .trip-sheet[open] { animation: trip-fade 0.2s ease-out; }
+}
