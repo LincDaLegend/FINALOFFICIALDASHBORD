@@ -2,7 +2,7 @@
 
 // Trip state + road distances for the Cebu trip planner (temporary feature).
 import { useEffect, useRef, useState } from 'react';
-import { DAYS, dayPoints, routeKey, estimateLegs, gasCost, nightlyFor, stayOf, emptyTrip, migrateTrip } from './tripData.js';
+import { DAYS, dayPoints, routeKey, estimateLegs, gasCost, nightlyFor, stayOf, emptyTrip, migrateTrip, addDays } from './tripData.js';
 
 const KEY = 'cebuTrip_v2';
 const OLD_KEY = 'cebuTrip_v1';
@@ -168,21 +168,29 @@ export function useTrip({ onRemote } = {}) {
 
 const inflight = new Set();
 
-/** Driving legs per day from OSRM (via /api/trip), debounced; straight-line estimates until they arrive. */
+/**
+ * How much slower real drives are than OpenStreetMap's times, measured from Google's times for your days
+ * (1 when there are none). The plan tools scale their drive times by it. Updated by useRoutes.
+ */
+export const driveCalibration = { factor: 1, source: 'osm' };
+
+/** Driving legs per day (Google with traffic when set up, else OSRM) via /api/trip, debounced; straight-line estimates until they arrive. */
 export function useRoutes(trip) {
   const [routes, setRoutes] = useState({});
-  const days = trip.days.map((_, i) => {
+  const days = trip.days.map((d, i) => {
     const pts = dayPoints(trip, i);
-    return { pts, key: pts.length > 1 ? routeKey(pts) : null };
+    // Leaving at this day's date and time (Cebu is UTC+8), so Google can predict that day's traffic
+    const at = `${addDays(trip.startDate, i)}T${d.start || '08:00'}:00+08:00`;
+    return { pts, path: pts.length > 1 ? routeKey(pts) : null, at, key: pts.length > 1 ? `${routeKey(pts)}@${at}` : null };
   });
   const sig = days.map(d => d.key).join('|');
 
   useEffect(() => {
     const t = setTimeout(() => {
-      days.forEach(({ key }) => {
+      days.forEach(({ key, path, at }) => {
         if (!key || routes[key] || inflight.has(key)) return;
         inflight.add(key);
-        fetch(`/api/trip?kind=drive&pts=${encodeURIComponent(key)}`)
+        fetch(`/api/trip?kind=drive&pts=${encodeURIComponent(path)}&at=${encodeURIComponent(at)}`)
           .then(r => r.json())
           .then(d => setRoutes(r => ({ ...r, [key]: d.legs ? d : { error: d.error || 'Route unavailable' } })))
           .catch(() => setRoutes(r => ({ ...r, [key]: { error: 'You seem to be offline' } })))
@@ -193,13 +201,20 @@ export function useRoutes(trip) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sig]);
 
-  return days.map(({ pts, key }) => {
+  const out = days.map(({ pts, key }) => {
     if (!key) return { pts, legs: [], line: null };
     const r = routes[key];
     if (!r) return { pts, legs: estimateLegs(pts), line: null, loading: true };
     if (r.error) return { pts, legs: estimateLegs(pts), line: null, error: r.error };
-    return { pts, legs: r.legs, line: r.line };
+    return { pts, legs: r.legs, line: r.line, source: r.source || 'osm' };
   });
+
+  // Google minutes ÷ OpenStreetMap minutes over every real drive (ignoring hops under 5 min)
+  let g = 0, o = 0;
+  out.forEach(r => r.source === 'google' && r.legs.forEach(l => { if (l.osmMin > 5) { g += l.min; o += l.osmMin; } }));
+  driveCalibration.factor = o > 0 ? Math.min(2.5, Math.max(0.8, g / o)) : 1;
+  driveCalibration.source = out.some(r => r.source === 'google') ? 'google' : 'osm';
+  return out;
 }
 
 export function dayCost(trip, i, route) {

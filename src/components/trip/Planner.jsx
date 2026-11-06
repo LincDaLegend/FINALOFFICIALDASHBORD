@@ -315,7 +315,9 @@ function Timetable({ trip, ops, routes, dnd, onAddEntry, onOpen }) {
     <section aria-label="Timetable" className="rounded-[18px] bg-surface min-w-0">
       <div className="flex items-center justify-between gap-3 px-4 pt-4 pb-2">
         <h2 className="text-title-2 flex items-center gap-2"><CalendarClock className="w-5 h-5 text-tint" aria-hidden />Timetable</h2>
-        <span className="text-footnote text-label-2">Drag spots and hotels onto a day</span>
+        <span className="text-footnote text-label-2 text-right">
+          {routes.some(r => r.source === 'google') ? 'Drive times: Google Maps, with traffic' : routes.some(r => r.source === 'osm') ? 'Drive times: OpenStreetMap, no traffic' : 'Drag spots and hotels onto a day'}
+        </span>
       </div>
       <div className="trip-timetable overflow-x-auto pb-3 snap-x">
         <div className="grid" style={{ gridTemplateColumns: `44px repeat(${DAYS}, minmax(150px, 1fr))`, minWidth: 44 + DAYS * 150 }}>
@@ -507,7 +509,7 @@ function TravelBlock({ e, fuel }) {
   const label = `${fmtDur(Math.round(e.leg.min))} · ${fmtKm(drive)}${e.leg.ferryKm > 0.5 ? ' + ferry' : ''}`;
   return (
     <div className="absolute left-3 right-1 flex items-center pointer-events-none" style={{ top: e.top, height: h }}
-      title={`Drive ${label} · ${peso(drive * fuel.pricePerL / Math.max(1, fuel.kmPerL))} gas`}>
+      title={`Drive ${label} · ${peso(drive * fuel.pricePerL / Math.max(1, fuel.kmPerL))} gas · ${e.leg.source === 'google' ? 'Google Maps, with traffic' : e.leg.estimated ? 'rough estimate' : 'OpenStreetMap, no traffic'}`}>
       <span className="absolute left-1.5 inset-y-0.5 border-l-2 border-dotted border-label-3" aria-hidden />
       {h >= 16 && (
         <span className="relative ml-3.5 inline-flex items-center gap-1 px-1.5 h-5 max-w-[calc(100%-14px)] overflow-hidden whitespace-nowrap rounded-full bg-fill text-[11px] font-medium text-label-2 tabular">

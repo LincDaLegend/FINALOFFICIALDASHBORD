@@ -7,6 +7,7 @@ import {
   Plane, Trees, Fish, Users, Star, CircleAlert, ArrowRight, Loader2, Lock, LockOpen, CalendarClock,
 } from 'lucide-react';
 import { Button, Chip } from '../business/ui.jsx';
+import { driveCalibration } from './tripHooks.js';
 import { updateSettings } from '../business/stores.js';
 import { DAYS, addDays, catOf, colorOf, fmtClock, fmtDur, gasCost, peso, stayOf, nightlyFor, hasSpot } from './tripData.js';
 
@@ -131,6 +132,7 @@ export const tripPayload = (trip) => {
   const extra = customMins(trip);
   const custom = new Set(trip.pool.filter(p => p.custom).map(p => p.uid));
   return {
+  driveFactor: driveCalibration.factor, // the plan tools scale OpenStreetMap drive times to match Google's
   people: trip.guests,
   prefs: trip.prefs,
   fuel: trip.fuel,

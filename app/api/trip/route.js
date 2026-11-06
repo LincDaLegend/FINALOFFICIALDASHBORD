@@ -151,7 +151,67 @@ async function stays(lat, lon) {
   return out;
 }
 
-async function drive(pts) {
+// ─── Google Routes (optional, server key GOOGLE_MAPS_API_KEY) ────────────────
+// Traffic-aware drive times for the timetable. Only times are used: route lines stay OpenStreetMap,
+// since Google's terms don't allow drawing its routes on a non-Google map.
+
+const gKey = () => (process.env.GOOGLE_MAPS_API_KEY || '').trim();
+const gCache = new Map();
+let gWarned = false;
+const latLng = ([lon, lat]) => ({ location: { latLng: { latitude: +lat, longitude: +lon } } });
+// Google wants a departure in the future; past or unparsable times mean "leave now"
+const future = (iso) => (iso && Date.parse(iso) > Date.now() + 60_000 ? new Date(Date.parse(iso)).toISOString() : undefined);
+
+async function googleLegs(coords, depart) {
+  // Drop back-to-back duplicates (entries "where you are"), ask Google, then put 0-minute legs back
+  const keep = coords.map((c, k) => k === 0 || c.join() !== coords[k - 1].join());
+  const pts = coords.filter((_, k) => keep[k]);
+  let legs = [];
+  if (pts.length > 1) {
+    const body = {
+      origin: latLng(pts[0]), destination: latLng(pts[pts.length - 1]), intermediates: pts.slice(1, -1).map(latLng),
+      travelMode: 'DRIVE', routingPreference: 'TRAFFIC_AWARE', departureTime: future(depart),
+    };
+    const ck = JSON.stringify(body);
+    let d = gCache.get(ck);
+    if (!d) {
+      const res = await fetch(`${process.env.GOOGLE_ROUTES_BASE || 'https://routes.googleapis.com'}/directions/v2:computeRoutes`, { // base overridable for tests
+        method: 'POST', signal: AbortSignal.timeout(15000),
+        headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': gKey(),
+          'X-Goog-FieldMask': 'routes.legs.duration,routes.legs.distanceMeters,routes.legs.steps.distanceMeters,routes.legs.steps.navigationInstruction.maneuver' },
+        body: ck,
+      });
+      d = await res.json().catch(() => null);
+      if (!res.ok || !d?.routes?.length) throw new Error(d?.error?.status || d?.error?.message || `Google answered ${res.status}`);
+      gCache.set(ck, d);
+      if (gCache.size > 300) gCache.delete(gCache.keys().next().value);
+    }
+    legs = d.routes[0].legs.map(l => ({
+      km: (l.distanceMeters || 0) / 1000,
+      min: (parseFloat(l.duration) || 0) / 60,
+      ferryKm: (l.steps || []).filter(st => /FERRY/.test(st.navigationInstruction?.maneuver || '')).reduce((a, st) => a + (st.distanceMeters || 0), 0) / 1000,
+      source: 'google',
+    }));
+  }
+  const out = [];
+  let g = 0;
+  for (let k = 1; k < coords.length; k++) out.push(keep[k] ? legs[g++] : { km: 0, min: 0, ferryKm: 0, source: 'google' });
+  return out;
+}
+
+/** A day's drive: Google times when a key works (else OpenStreetMap's), OpenStreetMap's line to draw. */
+async function drive(pts, depart) {
+  const coords = pts.split(';').map(c => c.split(',').map(Number));
+  const [osm, google] = await Promise.all([
+    osrmDrive(pts).catch(e => ({ error: e })),
+    gKey() ? googleLegs(coords, depart).catch(e => { if (!gWarned) { gWarned = true; console.warn('Google Routes unavailable, using OpenStreetMap:', e.message); } return null; }) : null,
+  ]);
+  if (google) return { legs: google.map((l, k) => ({ ...l, osmMin: osm.legs?.[k]?.min ?? null })), line: osm.line || null, source: 'google' };
+  if (osm.error) throw osm.error;
+  return { ...osm, source: 'osm' };
+}
+
+async function osrmDrive(pts) {
   const url = `https://router.project-osrm.org/route/v1/driving/${pts}?overview=simplified&geometries=geojson&steps=true`;
   const data = await politeFetch(url);
   if (data.code !== 'Ok' || !data.routes?.length) throw new Error(data.message || 'No route found');
@@ -800,7 +860,7 @@ export async function GET(req) {
       if (raw.length < 2 || raw.length > 25 || raw.some(c => c.length !== 2 || !c.every(Number.isFinite))) {
         return NextResponse.json({ error: 'pts must be 2–25 "lon,lat" pairs separated by ;' }, { status: 400 });
       }
-      return NextResponse.json(await drive(raw.map(c => c.map(n => n.toFixed(5)).join(',')).join(';')));
+      return NextResponse.json(await drive(raw.map(c => c.map(n => n.toFixed(5)).join(',')).join(';'), (p.get('at') || '').slice(0, 40)));
     }
     if (kind === 'ai') return NextResponse.json(await checkAiKey(req));
     if (kind === 'photo') {
@@ -932,13 +992,18 @@ const kmBetween = (a, b) => {
 };
 const hhmm = (t) => { const m = /^(\d{1,2}):(\d{2})$/.exec(t || ''); return m ? +m[1] * 60 + +m[2] : null; };
 
-async function driveMatrix(points) {
+/**
+ * Drive times between every pair of points (OpenStreetMap). `factor` scales them to match real drive times:
+ * the browser measures it from Google's times for your actual days (e.g. 1.5 when Google says 6 h for a 4 h OSM drive).
+ */
+async function driveMatrix(points, factor = 1) {
   if (points.length < 2) return { min: [[0]], km: [[0]], approx: false };
   const coords = points.map(p => `${(+p.lon).toFixed(5)},${(+p.lat).toFixed(5)}`).join(';');
+  const f = Number.isFinite(+factor) ? Math.min(2.5, Math.max(0.8, +factor)) : 1;
   try {
     const d = await politeFetch(`https://router.project-osrm.org/table/v1/driving/${coords}?annotations=duration,distance`);
     if (d.code !== 'Ok') throw new Error(d.message);
-    return { min: d.durations.map(r => r.map(v => (v == null ? null : v / 60))), km: d.distances.map(r => r.map(v => (v == null ? null : v / 1000))), approx: false };
+    return { min: d.durations.map(r => r.map(v => (v == null ? null : (v / 60) * f))), km: d.distances.map(r => r.map(v => (v == null ? null : v / 1000))), approx: false };
   } catch {
     // Straight line × road factor at 35 km/h if the routing service is down
     const km = points.map(a => points.map(b => kmBetween(a, b) * 1.35));
@@ -1050,7 +1115,7 @@ export async function POST(req) {
     const fuel = body.fuel || {};
     const gasPerKm = (num(fuel.pricePerL) || 65) / Math.max(1, num(fuel.kmPerL) || 10);
     const backBy = hhmm(prefs.backBy) ?? 21 * 60;
-    const Mr = await driveMatrix([...stops, ...cands]);
+    const Mr = await driveMatrix([...stops, ...cands], body.driveFactor);
     const dayStarts = dayInfo.map(d => ({ ids: d.ids, start: hhmm(d.start) ?? 8 * 60 }));
     // Today's plan with the same rules, for "before"
     const candIdx = new Map(cands.map((c, h) => [c.uid, h]));
@@ -1077,7 +1142,7 @@ export async function POST(req) {
     const { cands, fixed, unpriced } = hotelOptions(body, days);
     const fuel = body.fuel || {};
     const gasPerKm = (num(fuel.pricePerL) || 65) / Math.max(1, num(fuel.kmPerL) || 10);
-    const Mc = await driveMatrix([...stops, ...cands]);
+    const Mc = await driveMatrix([...stops, ...cands], body.driveFactor);
     const slots = dayInfo.map(d => ({ ids: d.ids, start: d.start }));
     const backByMin = hhmm(prefs.backBy) ?? 21 * 60;
     // Today's plan, priced the same way (current hotel choices, current order)
@@ -1123,7 +1188,7 @@ Already on the wishlist: ${stops.map(s => `${s.name} (${s.area || 'Cebu'})`).joi
   }
 
   const points = [...stops, ...hotels];
-  const M = await driveMatrix(points);
+  const M = await driveMatrix(points, body.driveFactor);
   const withHotels = (perDay, nStops) => perDay.map((ids, i) => {
     const seq = [];
     const prev = i > 0 ? dayInfo[i - 1].hotel : null;
@@ -1160,7 +1225,7 @@ Already on the wishlist: ${stops.map(s => `${s.name} (${s.area || 'Cebu'})`).joi
   const opt = hotelOptions(body, days);
   const H = opt.cands, NN = Math.max(0, dayInfo.length - 1);
   const pointsAI = [...stops, ...H];
-  const MA = await driveMatrix(pointsAI);
+  const MA = await driveMatrix(pointsAI, body.driveFactor);
   const fuel = body.fuel || {};
   const gasPerKm = (num(fuel.pricePerL) || 65) / Math.max(1, num(fuel.kmPerL) || 10);
   const nowNight = days.slice(0, NN).map(d => (opt.idx.has(d.hotel) ? opt.idx.get(d.hotel) : null));
@@ -1235,7 +1300,7 @@ ${matrixText}`;
     if (i >= 0 && i < NN && m && +m[1] >= 1 && +m[1] <= H.length) aiNight[i] = +m[1] - 1;
   }
   const finalStops = out.flatMap(d => d.stops.map(s => (s.isNew ? { ...s, mins: s.mins } : { ...stops[s.k], mins: s.mins })));
-  const M2 = await driveMatrix([...finalStops, ...H]);
+  const M2 = await driveMatrix([...finalStops, ...H], body.driveFactor);
   let c = 0;
   const slotsAI = out.map(d => ({ ids: d.stops.map(() => c++), start: d.start }));
   const solveH = (fixed) => solveCost({ stops: finalStops, slots: slotsAI, cands: H, M: M2, gasPerKm, backBy, hotelsOnly: true, fixed });
