@@ -152,8 +152,8 @@ async function stays(lat, lon) {
 }
 
 // ─── Google Routes (optional, server key GOOGLE_MAPS_API_KEY) ────────────────
-// Traffic-aware drive times for the timetable. Only times are used: route lines stay OpenStreetMap,
-// since Google's terms don't allow drawing its routes on a non-Google map.
+// Traffic-aware drive times and the route line for the timetable and the (Google) map.
+// If the page falls back to the OpenStreetMap map, it draws OSRM's line instead (Google's terms).
 
 const gKey = () => (process.env.GOOGLE_MAPS_API_KEY || '').trim();
 const gCache = new Map();
@@ -166,7 +166,7 @@ async function googleLegs(coords, depart) {
   // Drop back-to-back duplicates (entries "where you are"), ask Google, then put 0-minute legs back
   const keep = coords.map((c, k) => k === 0 || c.join() !== coords[k - 1].join());
   const pts = coords.filter((_, k) => keep[k]);
-  let legs = [];
+  let legs = [], line = null;
   if (pts.length > 1) {
     const body = {
       origin: latLng(pts[0]), destination: latLng(pts[pts.length - 1]), intermediates: pts.slice(1, -1).map(latLng),
@@ -178,7 +178,7 @@ async function googleLegs(coords, depart) {
       const res = await fetch(`${process.env.GOOGLE_ROUTES_BASE || 'https://routes.googleapis.com'}/directions/v2:computeRoutes`, { // base overridable for tests
         method: 'POST', signal: AbortSignal.timeout(15000),
         headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': gKey(),
-          'X-Goog-FieldMask': 'routes.legs.duration,routes.legs.distanceMeters,routes.legs.steps.distanceMeters,routes.legs.steps.navigationInstruction.maneuver' },
+          'X-Goog-FieldMask': 'routes.legs.duration,routes.legs.distanceMeters,routes.legs.steps.distanceMeters,routes.legs.steps.navigationInstruction.maneuver,routes.polyline.encodedPolyline' },
         body: ck,
       });
       d = await res.json().catch(() => null);
@@ -192,11 +192,29 @@ async function googleLegs(coords, depart) {
       ferryKm: (l.steps || []).filter(st => /FERRY/.test(st.navigationInstruction?.maneuver || '')).reduce((a, st) => a + (st.distanceMeters || 0), 0) / 1000,
       source: 'google',
     }));
+    line = decodePolyline(d.routes[0].polyline?.encodedPolyline);
   }
   const out = [];
   let g = 0;
   for (let k = 1; k < coords.length; k++) out.push(keep[k] ? legs[g++] : { km: 0, min: 0, ferryKm: 0, source: 'google' });
-  return out;
+  return { legs: out, line };
+}
+
+/** Google's encoded polyline → [[lat, lon], …] (every ~4th point is plenty to draw a day). */
+function decodePolyline(str) {
+  if (!str) return null;
+  const out = [];
+  let i = 0, lat = 0, lon = 0;
+  while (i < str.length) {
+    for (const which of [0, 1]) {
+      let shift = 0, result = 0, b;
+      do { b = str.charCodeAt(i++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+      const d = result & 1 ? ~(result >> 1) : result >> 1;
+      if (which === 0) lat += d; else lon += d;
+    }
+    out.push([+(lat / 1e5).toFixed(5), +(lon / 1e5).toFixed(5)]);
+  }
+  return out.length > 400 ? out.filter((_, k) => k % Math.ceil(out.length / 400) === 0 || k === out.length - 1) : out;
 }
 
 /** A day's drive: Google times when a key works (else OpenStreetMap's), OpenStreetMap's line to draw. */
@@ -206,7 +224,7 @@ async function drive(pts, depart) {
     osrmDrive(pts).catch(e => ({ error: e })),
     gKey() ? googleLegs(coords, depart).catch(e => { if (!gWarned) { gWarned = true; console.warn('Google Routes unavailable, using OpenStreetMap:', e.message); } return null; }) : null,
   ]);
-  if (google) return { legs: google.map((l, k) => ({ ...l, osmMin: osm.legs?.[k]?.min ?? null })), line: osm.line || null, source: 'google' };
+  if (google) return { legs: google.legs.map((l, k) => ({ ...l, osmMin: osm.legs?.[k]?.min ?? null })), line: google.line || osm.line || null, osmLine: osm.line || null, source: 'google' };
   if (osm.error) throw osm.error;
   return { ...osm, source: 'osm' };
 }
@@ -863,6 +881,11 @@ export async function GET(req) {
       return NextResponse.json(await drive(raw.map(c => c.map(n => n.toFixed(5)).join(',')).join(';'), (p.get('at') || '').slice(0, 40)));
     }
     if (kind === 'ai') return NextResponse.json(await checkAiKey(req));
+    // The Google map's browser key (meant to be public: restrict it to this site's address in Google Cloud)
+    if (kind === 'mapkey') {
+      const key = (process.env.GOOGLE_MAPS_BROWSER_KEY || '').trim();
+      return NextResponse.json({ key: key || null, mapId: (process.env.GOOGLE_MAP_ID || '').trim() || 'DEMO_MAP_ID' }, { headers: { 'Cache-Control': 'no-store' } });
+    }
     if (kind === 'photo') {
       const lat = Number(p.get('lat')), lon = Number(p.get('lon'));
       if (!Number.isFinite(lat) || !Number.isFinite(lon)) return NextResponse.json({ error: 'lat and lon are required' }, { status: 400 });

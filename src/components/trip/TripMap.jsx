@@ -1,216 +1,29 @@
 'use client';
 
-// 3D map for the Cebu trip planner: MapLibre GL + free OpenFreeMap vector tiles (no key),
-// AWS open terrain tiles for real mountains, 3D buildings, Apple Maps-style pins and route.
-import { useEffect, useRef, useState } from 'react';
-import * as maplibregl from 'maplibre-gl';
+// The day map: Google Maps when the server has a browser key (GOOGLE_MAPS_BROWSER_KEY), else, or if Google
+// refuses it, the free MapLibre / OpenStreetMap map. Each draws its own provider's route line.
+import { useEffect, useState } from 'react';
+import dynamic from 'next/dynamic';
 
-// MapLibre 6 runs tile parsing in a separate module worker; have the bundler ship that file as a static asset
-if (typeof window !== 'undefined') {
-  maplibregl.setWorkerUrl(new URL('../../../node_modules/maplibre-gl/dist/maplibre-gl-worker.mjs', import.meta.url).toString());
-}
-import 'maplibre-gl/dist/maplibre-gl.css';
-import './trip.css';
-import { colorOf } from './tripData.js';
+const Box = () => <div className="h-[300px] lg:h-[480px] rounded-[16px] bg-fill" />;
+const GoogleMap = dynamic(() => import('./TripGoogleMap.jsx'), { ssr: false, loading: Box });
+const MapLibreMap = dynamic(() => import('./TripMapLibre.jsx'), { ssr: false, loading: Box });
 
-const CEBU = { center: [123.85, 10.25], zoom: 8.2 };
-const STYLE = { light: 'https://tiles.openfreemap.org/styles/liberty', dark: 'https://tiles.openfreemap.org/styles/dark' };
-const TERRAIN_TILES = ['https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png'];
-const PITCH_3D = 55;
+let config = null; // { key, mapId }, asked once per page
 
-const BED_SVG = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2 20v-8a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v8"/><path d="M4 10V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v4"/><path d="M12 4v6"/><path d="M2 18h20"/></svg>';
-
-// Softer, Apple Maps-like palette over the OpenFreeMap "liberty" style
-const APPLE_LIGHT = [
-  [/^background$/, 'background-color', '#F4F2EE'],
-  [/^water$|^water_/, 'fill-color', '#A9D3F2'],
-  [/park|wood|grass/, 'fill-color', '#CFE8C4'],
-  [/^landuse_residential$/, 'fill-color', '#EFEDE8'],
-  [/^building$/, 'fill-color', '#E4E1DB'],
-];
-
-const prefersDark = () => window.matchMedia('(prefers-color-scheme: dark)').matches;
-
-function decorate(map, dark) {
-  const style = map.getStyle();
-  if (!dark) {
-    for (const layer of style.layers) {
-      for (const [re, prop, color] of APPLE_LIGHT) {
-        if (re.test(layer.id) && prop.startsWith(layer.type)) {
-          try { map.setPaintProperty(layer.id, prop, color); } catch {}
-        }
-      }
-    }
-  }
-
-  // Real terrain + gentle hill shading (Cebu's spine of mountains shows up when tilted)
-  if (!map.getSource('terrain')) {
-    map.addSource('terrain', { type: 'raster-dem', tiles: TERRAIN_TILES, encoding: 'terrarium', tileSize: 256, maxzoom: 13 });
-    map.addSource('hillshade-src', { type: 'raster-dem', tiles: TERRAIN_TILES, encoding: 'terrarium', tileSize: 256, maxzoom: 13 });
-  }
-  const firstSymbol = style.layers.find(l => l.type === 'symbol')?.id;
-  if (!map.getLayer('hills')) {
-    map.addLayer({
-      id: 'hills', type: 'hillshade', source: 'hillshade-src',
-      paint: { 'hillshade-exaggeration': dark ? 0.35 : 0.25, 'hillshade-shadow-color': dark ? '#000000' : '#6E6A61', 'hillshade-highlight-color': '#FFFFFF' },
-    }, firstSymbol);
-  }
-  map.setTerrain({ source: 'terrain', exaggeration: 1.4 });
-
-  // 3D buildings (the dark style ships without them)
-  const extrusions = style.layers.filter(l => l.type === 'fill-extrusion');
-  if (extrusions.length) {
-    extrusions.forEach(l => {
-      try { map.setPaintProperty(l.id, 'fill-extrusion-color', dark ? '#3A3A3C' : '#E6E3DD'); map.setPaintProperty(l.id, 'fill-extrusion-opacity', 0.9); } catch {}
-    });
-  } else if (style.sources.openmaptiles) {
-    map.addLayer({
-      id: 'trip-buildings-3d', type: 'fill-extrusion', source: 'openmaptiles', 'source-layer': 'building', minzoom: 14,
-      paint: {
-        'fill-extrusion-color': dark ? '#3A3A3C' : '#E6E3DD',
-        'fill-extrusion-height': ['coalesce', ['get', 'render_height'], 6],
-        'fill-extrusion-base': ['coalesce', ['get', 'render_min_height'], 0],
-        'fill-extrusion-opacity': 0.9,
-      },
-    }, firstSymbol);
-  }
-
-  // Sky and haze toward the horizon when tilted
-  try {
-    map.setSky(dark
-      ? { 'sky-color': '#0B1220', 'horizon-color': '#1C2433', 'fog-color': '#111827', 'sky-horizon-blend': 0.6, 'horizon-fog-blend': 0.6, 'fog-ground-blend': 0.4, 'atmosphere-blend': 0.6 }
-      : { 'sky-color': '#9CCBF2', 'horizon-color': '#E8F1FA', 'fog-color': '#F1F4F7', 'sky-horizon-blend': 0.5, 'horizon-fog-blend': 0.6, 'fog-ground-blend': 0.3, 'atmosphere-blend': 0.6 });
-  } catch {}
-
-  // Route: white casing under a blue line, like Apple Maps directions
-  if (!map.getSource('route')) map.addSource('route', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
-  const width = (base) => ['interpolate', ['linear'], ['zoom'], 8, base, 12, base * 1.6, 16, base * 2.6];
-  if (!map.getLayer('route-casing')) {
-    map.addLayer({ id: 'route-casing', type: 'line', source: 'route', layout: { 'line-cap': 'round', 'line-join': 'round' },
-      paint: { 'line-color': dark ? '#0A3A80' : '#FFFFFF', 'line-width': width(7) } });
-    map.addLayer({ id: 'route-line', type: 'line', source: 'route', layout: { 'line-cap': 'round', 'line-join': 'round' },
-      paint: { 'line-color': dark ? '#0A84FF' : '#007AFF', 'line-width': width(4.2) } });
-  }
-}
-
-function pinEl({ stay, name, n, color }) {
-  const el = document.createElement('div');
-  el.className = `trip-pin ${stay ? 'trip-pin--stay' : ''}`;
-  el.innerHTML = `<span class="trip-pin__head">${stay ? BED_SVG : n}</span><span class="trip-pin__tail"></span><span class="trip-pin__label"></span>`;
-  el.querySelector('.trip-pin__label').textContent = name.length > 22 ? name.slice(0, 21) + '…' : name;
-  el.title = name;
-  if (!stay && color) el.querySelector('.trip-pin__head').style.background = color;
-  return el;
-}
-
-function dotEl(p, onPick) {
-  const el = document.createElement('button');
-  el.type = 'button';
-  el.className = 'trip-dot';
-  el.title = p.name;
-  el.setAttribute('aria-label', `Add ${p.name}`);
-  el.innerHTML = '<span></span>';
-  el.addEventListener('click', (e) => { e.stopPropagation(); onPick?.(p); });
-  return el;
-}
-
-/**
- * Draws one day: numbered stops, purple bed pins where you sleep, the driving line,
- * and orange dots for search results (`extras`) you can tap to add.
- */
-export default function TripMap({ points, line, extras = [], onPick }) {
-  const box = useRef(null);
-  const map = useRef(null);
-  const markers = useRef([]);
-  const ready = useRef(false);
-  const latest = useRef({});
-  const [is3d, setIs3d] = useState(true);
-  latest.current = { points, line, extras, onPick };
-
-  function draw(animate = true) {
-    const m = map.current;
-    if (!m || !ready.current) return;
-    const { points, line, extras, onPick } = latest.current;
-
-    const coords = line?.length > 1 ? line.map(([lat, lon]) => [lon, lat]) : points.map(p => [p.lon, p.lat]);
-    m.getSource('route')?.setData({
-      type: 'FeatureCollection',
-      features: coords.length > 1 ? [{ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: coords } }] : [],
-    });
-
-    markers.current.forEach(mk => mk.remove());
-    markers.current = [];
-    let n = 0;
-    const seen = new Set();
-    points.forEach((p) => {
-      const stay = p.role !== 'stop';
-      const key = `${p.lat},${p.lon}`;
-      if (stay && seen.has(key)) return; // same hotel morning and night → one pin
-      seen.add(key);
-      const el = pinEl({ stay, name: p.name, n: stay ? null : ++n, color: stay ? null : colorOf(p) });
-      markers.current.push(new maplibregl.Marker({ element: el, anchor: 'bottom' }).setLngLat([p.lon, p.lat]).addTo(m));
-    });
-    extras.forEach((p) => {
-      markers.current.push(new maplibregl.Marker({ element: dotEl(p, onPick), anchor: 'center' }).setLngLat([p.lon, p.lat]).addTo(m));
-    });
-
-    const all = [...points.map(p => [p.lon, p.lat]), ...extras.map(p => [p.lon, p.lat])];
-    const duration = animate ? 1400 : 0;
-    if (all.length === 1) m.flyTo({ center: all[0], zoom: 13.5, duration, essential: true });
-    else if (all.length > 1) {
-      const b = all.reduce((bb, c) => bb.extend(c), new maplibregl.LngLatBounds(all[0], all[0]));
-      m.fitBounds(b, { padding: { top: 80, bottom: 50, left: 50, right: 50 }, maxZoom: 14.5, duration, pitch: m.getPitch(), bearing: m.getBearing(), essential: true });
-    } else m.flyTo({ ...CEBU, duration, essential: true });
-  }
-
+export default function TripMap({ line, osmLine, ...props }) {
+  const [conf, setConf] = useState(config);
+  const [failed, setFailed] = useState(false);
   useEffect(() => {
-    let dark = prefersDark();
-    const m = new maplibregl.Map({
-      container: box.current,
-      style: dark ? STYLE.dark : STYLE.light,
-      ...CEBU,
-      pitch: PITCH_3D,
-      bearing: -12,
-      maxPitch: 75,
-      attributionControl: { compact: true },
-      cooperativeGestures: true, // page scroll stays page scroll; ⌘/Ctrl + scroll or two fingers move the map
-    });
-    map.current = m;
-    m.addControl(new maplibregl.NavigationControl({ visualizePitch: true, showZoom: true }), 'top-right');
-    m.on('style.load', () => {
-      decorate(m, dark);
-      ready.current = true;
-      draw(false);
-    });
-
-    const mq = window.matchMedia('(prefers-color-scheme: dark)');
-    const onScheme = (e) => { dark = e.matches; ready.current = false; m.setStyle(dark ? STYLE.dark : STYLE.light); };
-    mq.addEventListener('change', onScheme);
-    return () => { mq.removeEventListener('change', onScheme); markers.current.forEach(mk => mk.remove()); m.remove(); map.current = null; ready.current = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (config) return;
+    fetch('/api/trip?kind=mapkey').then(r => r.json()).catch(() => ({ key: null }))
+      .then(d => { config = d; setConf(d); });
   }, []);
 
-  // Redraw (and glide the camera) only when what's on the map actually changes
-  const sig = JSON.stringify([points.map(p => [p.lat, p.lon, p.role, p.name]), line?.length || 0, line?.[0], extras.map(p => p.id)]);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => draw(true), [sig]);
-
-  const toggle3d = () => {
-    const m = map.current;
-    if (!m) return;
-    const next = !is3d;
-    setIs3d(next);
-    try { m.setTerrain(next ? { source: 'terrain', exaggeration: 1.4 } : null); } catch {}
-    m.easeTo({ pitch: next ? PITCH_3D : 0, bearing: next ? -12 : 0, duration: 900 });
-  };
-
-  return (
-    <div className="relative">
-      <div ref={box} className="trip-map h-[300px] lg:h-[480px] w-full rounded-[16px] overflow-hidden bg-fill" role="region" aria-label="Map of this day's route" />
-      <button type="button" onClick={toggle3d} aria-pressed={is3d}
-        className="absolute top-2.5 left-2.5 h-8 px-3 rounded-full text-[13px] font-semibold material-bar shadow-[0_2px_10px_rgba(0,0,0,0.15)] text-label pressable">
-        {is3d ? '2D' : '3D'}
-      </button>
-    </div>
-  );
+  if (!conf) return <Box />;
+  if (conf.key && !failed) {
+    return <GoogleMap apiKey={conf.key} mapId={conf.mapId} line={line} {...props}
+      onFail={(why) => { console.warn('Google map unavailable, using OpenStreetMap:', why); setFailed(true); }} />;
+  }
+  return <MapLibreMap line={osmLine === undefined ? line : osmLine} {...props} />;
 }

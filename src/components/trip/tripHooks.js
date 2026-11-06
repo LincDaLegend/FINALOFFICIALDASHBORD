@@ -206,7 +206,7 @@ export function useRoutes(trip) {
     const r = routes[key];
     if (!r) return { pts, legs: estimateLegs(pts), line: null, loading: true };
     if (r.error) return { pts, legs: estimateLegs(pts), line: null, error: r.error };
-    return { pts, legs: r.legs, line: r.line, source: r.source || 'osm' };
+    return { pts, legs: r.legs, line: r.line, osmLine: r.source === 'google' ? r.osmLine || null : r.line, source: r.source || 'osm' };
   });
 
   // Google minutes ÷ OpenStreetMap minutes over every real drive (ignoring hops under 5 min)

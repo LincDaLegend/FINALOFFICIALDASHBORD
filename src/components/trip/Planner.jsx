@@ -574,7 +574,7 @@ function MapCard({ trip, ops, routes }) {
   return (
     <section className="rounded-[18px] bg-surface p-3 sm:p-4 space-y-3" aria-label="Map">
       <Segmented label="Map day" size="sm" value={day} onChange={setDay} options={trip.days.map((_, i) => ({ value: i, label: `Day ${i + 1}` }))} />
-      <TripMap points={routes[day].pts.filter(p => !p.here)} line={routes[day].line}
+      <TripMap points={routes[day].pts.filter(p => !p.here)} line={routes[day].line} osmLine={routes[day].osmLine}
         extras={waiting.filter(hasSpot).map(p => ({ ...p, id: p.uid }))} onPick={(p) => ops.move(p.uid, day)} />
     </section>
   );
