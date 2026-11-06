@@ -88,13 +88,13 @@ export function useTrip({ onRemote } = {}) {
 
   // Pull: first load, then every few seconds while the page is visible, and on focus
   useEffect(() => {
-    let alive = true;
+    let alive = true, off = false;
     const pull = async (first = false) => {
-      if (busy() || document.hidden) return;
+      if (off || busy() || document.hidden) return;
       try {
         const r = await fetch(api(), { cache: 'no-store', headers: etag.current ? { 'x-have': etag.current } : {} });
         if (!alive) return;
-        if (r.status === 503) { setStatus('local'); return; }
+        if (r.status === 503) { off = true; setStatus('local'); return; } // sharing isn't set up: stop asking
         if (!r.ok) throw new Error();
         const d = await r.json();
         if (!alive || busy()) return;

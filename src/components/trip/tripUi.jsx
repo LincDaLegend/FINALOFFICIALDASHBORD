@@ -117,16 +117,6 @@ export function PeopleStepper({ value, onChange }) {
   );
 }
 
-export function DurationStepper({ mins, onChange, name, compact = false }) {
-  const btn = `${compact ? 'w-6 h-6' : 'w-7 h-7'} rounded-full bg-fill flex items-center justify-center text-label pressable disabled:opacity-30`;
-  return (
-    <span className="inline-flex items-center gap-1.5" role="group" aria-label={`Time at ${name}`}>
-      <button type="button" className={btn} onClick={() => onChange(Math.max(15, mins - 30))} disabled={mins <= 15} aria-label="30 minutes less"><Minus className="w-3.5 h-3.5" strokeWidth={2.5} aria-hidden /></button>
-      <span className={`${compact ? 'min-w-[52px] text-footnote' : 'min-w-[64px] text-subhead'} text-center font-medium tabular`}>{fmtDur(mins)}</span>
-      <button type="button" className={btn} onClick={() => onChange(Math.min(12 * 60, mins + 30))} aria-label="30 minutes more"><Plus className="w-3.5 h-3.5" strokeWidth={2.5} aria-hidden /></button>
-    </span>
-  );
-}
 
 // ─── Talking to /api/trip ────────────────────────────────────────────────────
 
@@ -337,13 +327,6 @@ export function applyPlan(t, res, asPlace) {
 
 export const planSig = (trip) => JSON.stringify([trip.pool.map(p => [p.uid, p.mins, p.must]), trip.days.map(d => [d.start, d.stops, d.hotel, !!d.pin]), (trip.hotels || []).map(h => [h.uid, h.price, h.lat, h.lon, !!h.must]), trip.prefs, trip.guests, trip.fuel]);
 
-export function NextButton({ children, onClick }) {
-  return (
-    <Button onClick={onClick} className="w-full">
-      {children}<ArrowRight className="w-4 h-4" aria-hidden />
-    </Button>
-  );
-}
 
 
 // ─── Hotels (shared by the wishlist and the itinerary) ───────────────────────
@@ -378,21 +361,6 @@ export function PinButton({ on, onToggle, night, size = 'md' }) {
   );
 }
 
-export function HotelRow({ h, ops, sub }) {
-  return (
-    <li className="flex items-center gap-3 pl-4 pr-2 py-2" style={{ '--inset': '76px' }}>
-      <PlacePhoto place={{ ...h, cat: 'stay' }} lookup={!!h.id} className="w-12 h-12 rounded-[12px]" iconSize={20} />
-      <span className="min-w-0 flex-1">
-        <span className="block text-headline leading-snug truncate">{h.name}</span>
-        {(sub || h.address || h.area) && <span className="block text-subhead text-label-2 truncate">{sub || h.address || h.area}</span>}
-      </span>
-      <MustStar on={!!h.must} name={h.name} word="must-stay" onToggle={() => ops.updateHotel(h.uid, { must: !h.must })} />
-      <PriceCell value={h.price} label={`${h.name} price per night`} onCommit={n => ops.updateHotel(h.uid, { price: n })} />
-      <button type="button" onClick={() => ops.removeHotel(h.uid)} aria-label={`Remove ${h.name}`}
-        className="w-9 h-9 flex items-center justify-center text-label-3 hover:text-red-ink pressable shrink-0"><X className="w-5 h-5" aria-hidden /></button>
-    </li>
-  );
-}
 
 const PRECISION = { exact: ['green', 'Exact'], street: ['blue', 'Street'], town: ['orange', 'Town only'] };
 
@@ -497,5 +465,18 @@ export function HotelForm({ trip, ops, near, onNear }) {
         <Button size="sm" type="submit" className="!h-10" disabled={!ready}>Add</Button>
       </div>
     </form>
+  );
+}
+
+const DURATIONS = [15, 30, 45, 60, 90, 120, 150, 180, 210, 240, 300, 360, 420, 480];
+
+/** How long you stay at a spot; Lowest cost and AI plan around it. */
+export function DurationPick({ mins, name, onChange }) {
+  const opts = DURATIONS.includes(mins) ? DURATIONS : [...DURATIONS, mins].sort((a, b) => a - b);
+  return (
+    <select value={mins} onChange={e => onChange(+e.target.value)} aria-label={`Time at ${name}`} title="Time there"
+      className="h-7 pl-1.5 pr-0.5 rounded-[8px] bg-fill text-footnote font-semibold tabular text-label outline-none focus:ring-2 focus:ring-tint cursor-pointer">
+      {opts.map(m => <option key={m} value={m}>{fmtDur(m)}</option>)}
+    </select>
   );
 }

@@ -1,29 +1,27 @@
 'use client';
 
 // Cebu trip planner tab (temporary feature).
-// Three steps: 1 Wishlist (everything you might do) → 2 Organize (sort it into days, with AI) → 3 Itinerary (times, stays, costs).
+// One page: a pool of places + hotels, a timetable of the days (travel added automatically), plan tools, map, find places.
 // To remove: delete src/components/trip/ and app/api/trip/, the 'trip' lines in
 // src/components/business/Layout.jsx and App.jsx, and `npm uninstall maplibre-gl`.
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
-import { Check, ChevronDown, CalendarDays, Heart, Users } from 'lucide-react';
+import { ChevronDown, CalendarDays, Heart, Users } from 'lucide-react';
 import { Row, Button, useToast, ConfirmDialog, SPRING } from '../business/ui.jsx';
 import { NumberRow } from '../business/FindCards.jsx';
 import { DAYS, emptyTrip, asPlace, addDays, fmtDur, peso, uid as newUid } from './tripData.js';
 import { useTrip, useRoutes, dayCost } from './tripHooks.js';
 import { PeopleStepper, fmtDay, isStay } from './tripUi.jsx';
-import WishlistStep from './WishlistStep.jsx';
-import OrganizeStep from './OrganizeStep.jsx';
-import ItineraryStep from './ItineraryStep.jsx';
+import Planner from './Planner.jsx';
+import { AiOrganizer } from './AiTools.jsx';
+import { SuggestCard, Discover } from './FindPlaces.jsx';
 
 export default function CebuTrip() {
   const toast = useToast();
-  const [trip, setTrip, sync] = useTrip({
+  const [trip, setTrip] = useTrip({
     onRemote: (kind) => toast(kind === 'merged' ? 'Merged with someone else’s changes' : 'Updated by someone else', <Users className="w-4 h-4 text-tint" aria-hidden />),
   });
-  const [step, setStep] = useState(() => (trip.pool.length ? (trip.days.some(d => d.stops.length) ? 'itinerary' : 'organize') : 'wish'));
-  const [dayIdx, setDayIdx] = useState(0);
   const [confirm, setConfirm] = useState(false);
   const reduce = useReducedMotion();
   const routes = useRoutes(trip);
@@ -38,13 +36,13 @@ export default function CebuTrip() {
         const have = (trip.hotels || []).find(h => h.id && h.id === p.id);
         if (have) { if (night != null) ops.setNight(night, have.uid); }
         else ops.addHotel({ id: p.id, name: p.name, area: p.area || '', lat: p.lat, lon: p.lon, wiki: p.wiki || null, price: 0 }, night);
-        if (!quiet) toast(night != null ? `Hotel for night ${night + 1}` : have ? 'Already in your hotels' : 'Added to your hotels', <Heart className="w-4 h-4 text-red" fill="currentColor" aria-hidden />);
+        if (!quiet) toast(night != null ? `Hotel for night ${night + 1}` : have ? 'Already in the pool' : 'Hotel added to the pool', <Heart className="w-4 h-4 text-red" fill="currentColor" aria-hidden />);
         return;
       }
       const existing = trip.pool.find(x => x.id === p.id);
       if (existing) {
         if (day != null) { ops.move(existing.uid, day); if (!quiet) toast(`Added to Day ${day + 1}`, <Heart className="w-4 h-4 text-red" fill="currentColor" aria-hidden />); }
-        else if (!quiet) toast('Already on your wishlist');
+        else if (!quiet) toast('Already in the pool');
         return;
       }
       const place = asPlace(p);
@@ -53,7 +51,7 @@ export default function CebuTrip() {
         pool: [...t.pool, place],
         days: day == null ? t.days : t.days.map((d, i) => (i === day ? { ...d, stops: [...d.stops, place.uid] } : d)),
       }));
-      if (!quiet) toast(day == null ? 'Added to your wishlist' : `Added to Day ${day + 1}`, <Heart className="w-4 h-4 text-red" fill="currentColor" aria-hidden />);
+      if (!quiet) toast(day == null ? 'Added to the pool' : `Added to Day ${day + 1}`, <Heart className="w-4 h-4 text-red" fill="currentColor" aria-hidden />);
     },
     remove(uid) {
       setTrip(t => ({ ...t, pool: t.pool.filter(p => p.uid !== uid), days: t.days.map(d => ({ ...d, stops: d.stops.filter(u => u !== uid) })) }));
@@ -98,60 +96,34 @@ export default function CebuTrip() {
     togglePin(i) { setTrip(t => ({ ...t, days: t.days.map((d, k) => (k === i && d.hotel ? { ...d, pin: !d.pin } : d)) })); },
   };
 
-  const go = (s) => { setStep(s); window.scrollTo({ top: 0, behavior: reduce ? 'auto' : 'smooth' }); };
-  const plannedCount = new Set(trip.days.flatMap(d => d.stops)).size;
   const hasAnything = trip.pool.length > 0 || (trip.hotels || []).length > 0;
+  const inPool = useMemo(() => new Set([...trip.pool.map(p => p.id), ...(trip.hotels || []).map(h => h.id).filter(Boolean)]), [trip.pool, trip.hotels]);
+  const showDay = (i) => document.getElementById(`day-col-${i}`)?.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'center', inline: 'center' });
 
   return (
     <div className="min-h-dvh pb-28 lg:pb-16">
-      <div className="mx-auto max-w-6xl px-4 sm:px-6 pt-10 space-y-5">
-        <Header trip={trip} ops={ops} sync={sync} onReset={hasAnything ? () => setConfirm(true) : null} />
-        <Steps step={step} onStep={go} wish={trip.pool.length} planned={plannedCount} />
-        {step !== 'wish' && <TripSummary trip={trip} costs={costs} patch={ops.patch} onPickDay={(i) => { setDayIdx(i); go('itinerary'); }} />}
-
-        <AnimatePresence mode="wait" initial={false}>
-          <motion.div key={step} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: reduce ? 0 : 0.15 }}>
-            {step === 'wish' && <WishlistStep trip={trip} ops={ops} onNext={() => go('organize')} />}
-            {step === 'organize' && <OrganizeStep trip={trip} setTrip={setTrip} ops={ops} costs={costs} onNext={() => go('itinerary')} />}
-            {step === 'itinerary' && (
-              <ItineraryStep trip={trip} setTrip={setTrip} ops={ops} routes={routes} costs={costs}
-                dayIdx={dayIdx} setDayIdx={setDayIdx} />
-            )}
-          </motion.div>
-        </AnimatePresence>
+      <div className="mx-auto max-w-[1440px] px-4 sm:px-6 pt-10 space-y-5">
+        <Header trip={trip} ops={ops} onReset={hasAnything ? () => setConfirm(true) : null} />
+        <TripSummary trip={trip} costs={costs} patch={ops.patch} onPickDay={showDay} />
+        <AiOrganizer trip={trip} setTrip={setTrip} ops={ops} />
+        <Planner trip={trip} setTrip={setTrip} ops={ops} routes={routes} />
+        <section id="find" className="scroll-mt-6 space-y-6 pt-2" aria-label="Find places">
+          <h2 className="text-title-1 px-1">Find places</h2>
+          <SuggestCard trip={trip} ops={ops} inPool={inPool} />
+          <Discover isAdded={(p) => inPool.has(p.id)} onAdd={(p) => ops.add(p)} addedLabel="In the pool" />
+        </section>
       </div>
 
-      <ConfirmDialog open={confirm} title="Start over?" message="Clears your wishlist, days and hotels." confirmLabel="Clear"
+      <ConfirmDialog open={confirm} title="Start over?" message="Clears the pool, the timetable and hotels." confirmLabel="Clear"
         onCancel={() => setConfirm(false)}
-        onConfirm={() => { setTrip(t => ({ ...emptyTrip(), startDate: t.startDate, guests: t.guests, fuel: t.fuel, prefs: t.prefs })); setConfirm(false); go('wish'); }} />
+        onConfirm={() => { setTrip(t => ({ ...emptyTrip(), startDate: t.startDate, guests: t.guests, fuel: t.fuel, prefs: t.prefs })); setConfirm(false); }} />
     </div>
   );
 }
 
 // ─── Header ──────────────────────────────────────────────────────────────────
 
-const SYNC = {
-  live: ['bg-green', 'Shared'],
-  saving: ['bg-tint', 'Saving…'],
-  connecting: ['bg-label-3', 'Connecting…'],
-  offline: ['bg-orange', 'Offline · saved here'],
-  local: ['bg-label-3', 'This device only'],
-};
-
-function SyncPill({ status }) {
-  const [dot, label] = SYNC[status] || SYNC.connecting;
-  const share = async () => {
-    try { await navigator.clipboard.writeText(window.location.href.split('#')[0] + '#trip'); } catch {}
-  };
-  return (
-    <button type="button" onClick={share} title={status === 'live' || status === 'saving' ? 'Everyone with the link sees and edits this trip · tap to copy link' : undefined}
-      className="inline-flex items-center gap-1.5 h-8 px-3 rounded-full bg-surface text-[14px] font-medium pressable" aria-live="polite">
-      <span className={`w-2 h-2 rounded-full ${dot}`} aria-hidden />{label}
-    </button>
-  );
-}
-
-function Header({ trip, ops, sync, onReset }) {
+function Header({ trip, ops, onReset }) {
   const end = addDays(trip.startDate, DAYS - 1);
   const range = `${fmtDay(trip.startDate, { month: 'short', day: 'numeric' })} – ${fmtDay(end, { month: 'short', day: 'numeric' })}`;
   return (
@@ -168,42 +140,10 @@ function Header({ trip, ops, sync, onReset }) {
         </label>
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        <SyncPill status={sync.status} />
         <PeopleStepper value={trip.guests} onChange={n => ops.patch({ guests: n })} />
         {onReset && <Button size="sm" variant="plain" onClick={onReset}>Start over</Button>}
       </div>
     </header>
-  );
-}
-
-// ─── Step bar: 1 Wishlist → 2 Organize → 3 Itinerary ─────────────────────────
-
-function Steps({ step, onStep, wish, planned }) {
-  const items = [
-    { id: 'wish', n: 1, title: 'Wishlist', sub: `${wish} place${wish === 1 ? '' : 's'}` },
-    { id: 'organize', n: 2, title: 'Organize', sub: `${planned}/${wish} planned` },
-    { id: 'itinerary', n: 3, title: 'Itinerary', sub: 'Day by day' },
-  ];
-  const at = items.findIndex(x => x.id === step);
-  return (
-    <nav aria-label="Planning steps" className="grid grid-cols-3 gap-1.5 sm:gap-2 p-1.5 rounded-[18px] bg-fill">
-      {items.map((s, k) => {
-        const on = s.id === step;
-        const done = k < at;
-        return (
-          <button key={s.id} type="button" onClick={() => onStep(s.id)} aria-current={on ? 'step' : undefined}
-            className={`relative flex items-center gap-2.5 rounded-[14px] px-2.5 sm:px-3.5 py-2.5 text-left pressable transition-colors ${on ? 'bg-surface shadow-[0_2px_10px_rgba(0,0,0,0.08)]' : 'hover:bg-surface/60'}`}>
-            <span className={`w-8 h-8 rounded-full flex items-center justify-center text-[15px] font-bold shrink-0 ${on ? 'bg-tint text-white' : done ? 'bg-green text-white' : 'bg-surface text-label-2'}`}>
-              {done ? <Check className="w-4 h-4" strokeWidth={3} aria-hidden /> : s.n}
-            </span>
-            <span className="min-w-0">
-              <span className={`block text-[16px] font-semibold leading-tight truncate ${on ? '' : 'text-label-2'}`}>{s.title}</span>
-              <span className="hidden sm:block text-footnote text-label-2 truncate tabular">{s.sub}</span>
-            </span>
-          </button>
-        );
-      })}
-    </nav>
   );
 }
 

@@ -1,35 +1,18 @@
 'use client';
 
-// Step 1 · Wishlist: collect everything you might want to do (AI suggestions, search, popular spots).
-import { useMemo, useState } from 'react';
-import { Search, X, Loader2, WandSparkles, Check, Heart } from 'lucide-react';
-import { Segmented, Button, Chip } from '../business/ui.jsx';
+// Find places for the pool: AI ideas, search, popular spots.
+import { useState } from 'react';
+import { Search, X, Loader2, WandSparkles, Check } from 'lucide-react';
+import { Segmented, Button } from '../business/ui.jsx';
 import { useSettings } from '../business/stores.js';
-import { SPOTS, REGIONS, catOf, fmtDur } from './tripData.js';
-import {
-  PlacePhoto, PlaceCard, MustStar, KeyPrompt, ErrorLine, NextButton, postTrip, tripPayload, isKeyProblem, HotelRow, HotelForm,
-} from './tripUi.jsx';
+import { SPOTS, REGIONS, catOf } from './tripData.js';
+import { PlaceCard, KeyPrompt, ErrorLine, postTrip, tripPayload, isKeyProblem } from './tripUi.jsx';
 
 const INTERESTS = ['Beaches', 'Waterfalls', 'Islands & diving', 'Food', 'History & churches', 'Views & hikes', 'Nature & parks', 'Shopping', 'Family-friendly', 'Hidden gems'];
 
-export default function WishlistStep({ trip, ops, onNext }) {
-  const inPool = useMemo(() => new Set([...trip.pool.map(p => p.id), ...(trip.hotels || []).map(h => h.id).filter(Boolean)]), [trip.pool, trip.hotels]);
-  return (
-    <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_380px] lg:gap-8 items-start">
-      <div className="space-y-8 min-w-0">
-        <SuggestCard trip={trip} ops={ops} inPool={inPool} />
-        <Discover isAdded={(p) => inPool.has(p.id)} onAdd={(p) => ops.add(p)} />
-      </div>
-      <div className="order-first lg:order-none lg:sticky lg:top-5">
-        <PoolPanel trip={trip} ops={ops} onNext={onNext} />
-      </div>
-    </div>
-  );
-}
-
 // ─── AI suggestions ──────────────────────────────────────────────────────────
 
-function SuggestCard({ trip, ops, inPool }) {
+export function SuggestCard({ trip, ops, inPool }) {
   const { anthropicKey } = useSettings();
   const interests = trip.prefs.interests || [];
   const [note, setNote] = useState('');
@@ -152,84 +135,5 @@ export function Discover({ isAdded, onAdd, title = 'Search', addedLabel }) {
         {list.map(p => <PlaceCard key={p.id} p={p} added={isAdded(p)} onAdd={onAdd} addedLabel={addedLabel} />)}
       </div>
     </section>
-  );
-}
-
-// ─── The wishlist itself ─────────────────────────────────────────────────────
-
-function PoolPanel({ trip, ops, onNext }) {
-  const dayOf = useMemo(() => { const m = new Map(); trip.days.forEach((d, i) => d.stops.forEach(u => m.set(u, i))); return m; }, [trip.days]);
-  const hotels = trip.hotels || [];
-  const [near, setNear] = useState('');
-  const nearUid = trip.pool.some(p => p.uid === near) ? near : trip.pool[trip.pool.length - 1]?.uid || '';
-  const nightsOf = (id) => trip.days.slice(0, -1).map((d, k) => (d.hotel === id ? k + 1 : null)).filter(Boolean);
-  const musts = trip.pool.filter(p => p.must).length;
-  return (
-    <section className="rounded-[18px] bg-surface overflow-hidden">
-      <div className="px-4 pt-4 pb-1">
-        <h2 className="text-title-2">Your wishlist</h2>
-      </div>
-
-      <div className="max-h-[60vh] lg:max-h-[calc(100dvh-220px)] overflow-y-auto">
-        <SectionHead title="Places" note={`${trip.pool.length}${musts ? ` · ${musts} must-do${musts > 1 ? 's' : ''}` : ''}`} />
-        {trip.pool.length === 0 ? (
-          <Empty icon={Heart}>No places yet</Empty>
-        ) : (
-          <ul className="group-list">
-            {trip.pool.map(p => {
-              const day = dayOf.get(p.uid);
-              return (
-                <li key={p.uid} className="flex items-center gap-3 pl-4 pr-2 py-2.5" style={{ '--inset': '76px' }}>
-                  <PlacePhoto place={p} className="w-12 h-12 rounded-[12px]" iconSize={20} />
-                  <span className="min-w-0 flex-1">
-                    <span className="block text-headline leading-snug truncate">{p.name}</span>
-                    <span className="flex items-center gap-1.5 text-subhead text-label-2 min-w-0">
-                      {day != null ? <Chip tone="blue">Day {day + 1}</Chip> : <Chip>Not planned</Chip>}
-                      <span className="truncate">{[p.area, fmtDur(p.mins)].filter(Boolean).join(' · ')}</span>
-                    </span>
-                  </span>
-                  <MustStar on={p.must} name={p.name} onToggle={() => ops.update(p.uid, { must: !p.must })} />
-                  <button type="button" onClick={() => ops.remove(p.uid)} aria-label={`Remove ${p.name} from wishlist`}
-                    className="w-9 h-9 flex items-center justify-center text-label-3 hover:text-red-ink pressable shrink-0"><X className="w-5 h-5" aria-hidden /></button>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-
-        <SectionHead title="Hotels" note={`${hotels.length} · ₱ per night`} />
-        {hotels.length > 0 && (
-          <ul className="group-list shadow-[inset_0_-0.5px_0_var(--separator)]">
-            {hotels.map(h => {
-              const n = nightsOf(h.uid);
-              return <HotelRow key={h.uid} h={h} ops={ops} sub={[n.length ? `Night ${n.join(', ')}` : 'No night yet', h.address || h.area].filter(Boolean).join(' · ')} />;
-            })}
-          </ul>
-        )}
-        <HotelForm trip={trip} ops={ops} near={nearUid} onNear={setNear} />
-      </div>
-
-      <div className="p-3 shadow-[inset_0_0.5px_0_var(--separator)]">
-        <NextButton onClick={onNext}>Next: organize</NextButton>
-      </div>
-    </section>
-  );
-}
-
-function SectionHead({ title, note }) {
-  return (
-    <div className="flex items-baseline justify-between gap-3 px-4 pt-4 pb-1.5 shadow-[inset_0_-0.5px_0_var(--separator)]">
-      <h3 className="text-footnote font-semibold uppercase tracking-wide text-label-2">{title}</h3>
-      <span className="text-footnote text-label-2 tabular">{note}</span>
-    </div>
-  );
-}
-
-function Empty({ icon: Icon, children }) {
-  return (
-    <p className="flex items-center gap-3 px-4 py-3 text-callout text-label-2">
-      <span className="w-12 h-12 rounded-[12px] bg-fill flex items-center justify-center shrink-0"><Icon className="w-5 h-5" aria-hidden /></span>
-      {children}
-    </p>
   );
 }

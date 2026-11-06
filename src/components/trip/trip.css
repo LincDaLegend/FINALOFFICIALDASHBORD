@@ -35,3 +35,11 @@
 .trip-map .maplibregl-ctrl-group { border-radius: 10px; overflow: hidden; box-shadow: 0 2px 10px rgba(0, 0, 0, 0.15); }
 .trip-map .maplibregl-ctrl-attrib { font-size: 10px; }
 .trip-map .maplibregl-cooperative-gesture-screen { font: 600 15px -apple-system, BlinkMacSystemFont, system-ui, sans-serif; border-radius: 16px; }
+
+/* Touch screens: small controls in the pool get finger-sized (≥40px) targets */
+@media (pointer: coarse) {
+  .trip-touch button, .trip-touch select { min-height: 40px; }
+  .trip-touch button:not(.w-full) { min-width: 40px; }
+}
+/* The timetable scrolls sideways on its own, without dragging the page or triggering back-swipe */
+.trip-timetable { overscroll-behavior-x: contain; }
