@@ -5,7 +5,7 @@
 import { useEffect, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import './trip.css';
-import { X, Car, BedDouble, Ship, Loader2, PiggyBank, ExternalLink, Inbox, CalendarClock, Lock, LockOpen, Plus, MapPin, Clock } from 'lucide-react';
+import { X, Car, BedDouble, Ship, Loader2, PiggyBank, ExternalLink, Inbox, CalendarClock, Lock, LockOpen, Plus, MapPin, Clock, StickyNote } from 'lucide-react';
 import { Segmented, Button, useToast } from '../business/ui.jsx';
 import { DAYS, schedule, fmtClock, fmtDur, peso, addDays, placesById, stayOf, nightlyFor, bookingLinks, colorOf, hasSpot, asEntry } from './tripData.js';
 import PlaceInfo from './PlaceInfo.jsx';
@@ -447,29 +447,50 @@ function DayColumn({ trip, i, info, height, y, backBy, ops, dnd, onOpen }) {
 
 function StopBlock({ e, i, late, ops, dnd, onOpen }) {
   const p = e.place;
+  const [editing, setEditing] = useState(false);
   const h = e.h;
   const roomy = h >= 84; // tall enough to show its controls; shorter blocks show them on hover / tap
+  const note = (p.note || '').trim();
+  // How much of the note fits under the name and times (the rest shows on hover, or in the details)
+  const noteLines = h >= 150 ? 'line-clamp-4' : h >= 110 ? 'line-clamp-2' : 'line-clamp-1';
   return (
-    <div draggable onDragStart={dnd.start({ kind: 'place', id: p.uid, from: i })} onDragEnd={dnd.end} tabIndex={0}
+    <div draggable={!editing} onDragStart={dnd.start({ kind: 'place', id: p.uid, from: i })} onDragEnd={dnd.end} tabIndex={0}
       className={`group absolute inset-x-1 rounded-[10px] bg-surface shadow-[0_1px_3px_rgba(0,0,0,0.12)] overflow-hidden cursor-grab active:cursor-grabbing
-        hover:z-20 focus-within:z-20 hover:min-h-[76px] focus-within:min-h-[76px] focus:min-h-[76px] focus:z-20 outline-none focus:ring-2 focus:ring-tint
-        ${late ? 'ring-1 ring-red' : ''} ${dnd.drag?.id === p.uid ? 'opacity-40' : ''}`}
+        hover:z-20 focus-within:z-20 ${note ? 'hover:min-h-[112px] focus-within:min-h-[112px] focus:min-h-[112px]' : 'hover:min-h-[76px] focus-within:min-h-[76px] focus:min-h-[76px]'} focus:z-20 outline-none focus:ring-2 focus:ring-tint
+        ${editing ? 'z-30 min-h-[150px] shadow-[0_8px_24px_rgba(0,0,0,0.18)]' : ''} ${late ? 'ring-1 ring-red' : ''} ${dnd.drag?.id === p.uid ? 'opacity-40' : ''}`}
       style={{ top: e.top, height: h }}>
       <span className="absolute inset-y-0 left-0 w-1" style={{ background: colorOf(p) }} aria-hidden />
       <div className="pl-2.5 pr-1 py-1">
-        <div className="flex items-start gap-1">
+        <div className="flex items-start gap-0.5">
           <span className="min-w-0 flex-1">
             <button type="button" onClick={() => onOpen('place', p.uid)} title="Details"
               className={`block w-full text-left text-footnote font-semibold leading-tight hover:text-tint-ink ${roomy ? 'line-clamp-2' : 'truncate'}`}>{p.name}</button>
             <span className={`flex items-center gap-0.5 text-[11px] tabular whitespace-nowrap ${late ? 'text-red-ink font-semibold' : 'text-label-2'}`}
               title={p.at ? (e.behind ? `Set for ${fmtClock(toMin(p.at))}: ${fmtDur(e.behind)} late` : `Set for ${fmtClock(toMin(p.at))}`) : undefined}>
               {p.at && <Clock className="w-3 h-3 shrink-0" aria-label="Fixed time" />}{fmtRange(e.from, e.to)}
+              {note && !roomy && <StickyNote className="w-3 h-3 shrink-0 ml-0.5 text-orange-ink group-hover:hidden group-focus-within:hidden" aria-label="Has a note" />}
             </span>
           </span>
+          <button type="button" onClick={() => setEditing(true)} aria-label={note ? `Edit note for ${p.name}` : `Add a note to ${p.name}`} title={note ? 'Edit note' : 'Add note'}
+            className={`w-6 h-6 -mt-0.5 items-center justify-center pressable shrink-0 ${editing ? 'hidden' : roomy ? 'flex' : 'hidden group-hover:flex group-focus-within:flex group-focus:flex'} ${note ? 'text-orange-ink' : 'text-label-3 hover:text-label'}`}>
+            <StickyNote className="w-3.5 h-3.5" aria-hidden />
+          </button>
           <button type="button" onClick={() => ops.move(p.uid, null)} aria-label={`Back to pool: ${p.name}`} title="Back to pool"
             className="w-6 h-6 -mt-0.5 flex items-center justify-center text-label-3 hover:text-red-ink pressable shrink-0"><X className="w-3.5 h-3.5" aria-hidden /></button>
         </div>
-        <div className={`items-center gap-0.5 mt-1 ${roomy ? 'flex' : 'hidden group-hover:flex group-focus-within:flex group-focus:flex'}`}>
+        {editing ? (
+          <textarea autoFocus value={p.note || ''} onChange={ev => ops.update(p.uid, { note: ev.target.value || null })}
+            onBlur={() => setEditing(false)} onKeyDown={ev => { if (ev.key === 'Escape' || (ev.key === 'Enter' && !ev.shiftKey)) { ev.preventDefault(); ev.currentTarget.blur(); } }}
+            rows={3} maxLength={600} placeholder="Note…" aria-label={`Note for ${p.name}`}
+            className="mt-1 w-full px-2 py-1 rounded-[8px] bg-[rgba(255,204,0,0.16)] text-[12px] leading-snug text-label outline-none focus:ring-2 focus:ring-tint resize-none placeholder:text-label-3" />
+        ) : note ? (
+          <p className={`mt-1 flex gap-1 text-[11px] leading-snug text-label ${roomy ? '' : 'hidden group-hover:flex group-focus-within:flex group-focus:flex'}`}
+            onDoubleClick={() => setEditing(true)} title={note}>
+            <StickyNote className="w-3 h-3 mt-[1px] shrink-0 text-orange-ink" aria-hidden />
+            <span className={`min-w-0 whitespace-pre-line break-words ${noteLines}`}>{note}</span>
+          </p>
+        ) : null}
+        <div className={`items-center gap-0.5 mt-1 ${editing ? 'hidden' : roomy ? 'flex' : 'hidden group-hover:flex group-focus-within:flex group-focus:flex'}`}>
           <DurationPick mins={p.mins} name={p.name} onChange={mins => ops.update(p.uid, { mins })} />
           {p.custom
             ? <AtPick at={p.at} name={p.name} onChange={at => ops.update(p.uid, { at })} />
