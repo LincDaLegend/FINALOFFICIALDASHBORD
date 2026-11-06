@@ -205,14 +205,51 @@ function entriesOf(trip, i, route) {
   return { entries: out, ends, loading: route.loading };
 }
 
+const LEAVE_H = 22, STOP_MIN_H = 30, NIGHT_H = 44, TRAVEL_MIN_H = 22, GAP = 2;
+
+/**
+ * Pixel positions for a day's entries. Blocks sit at their clock time when there's room;
+ * when short stays or short drives would make them collide, later blocks slide down so
+ * nothing overlaps (each block still shows its real times).
+ */
+function layoutDay(entries, y, freeDay, start) {
+  let cursor = -Infinity;
+  const out = entries.map((e) => {
+    if (e.type === 'leave') {
+      const top = y(e.at) - LEAVE_H - GAP;
+      cursor = top + LEAVE_H + GAP;
+      return { ...e, top, h: LEAVE_H };
+    }
+    if (e.type === 'travel') {
+      if (freeDay) return { ...e, hidden: true };
+      const top = Math.max(y(e.from), cursor);
+      const h = Math.max(y(e.to) - y(e.from), e.leg.min >= 1 ? TRAVEL_MIN_H : 0);
+      cursor = top + h;
+      return { ...e, top, h };
+    }
+    if (e.type === 'night') {
+      const top = freeDay ? y(start) + 64 : Math.max(y(e.at), cursor + GAP);
+      cursor = top + NIGHT_H;
+      return { ...e, top, h: NIGHT_H };
+    }
+    const top = Math.max(y(e.from), cursor + GAP);
+    const h = Math.max(STOP_MIN_H, (e.to - e.from) * PX);
+    cursor = top + h;
+    return { ...e, top, h };
+  });
+  return { laid: out, bottom: cursor };
+}
+
 function Timetable({ trip, ops, routes, dnd }) {
   const backBy = toMin(trip.prefs.backBy || '21:00');
   const days = trip.days.map((_, i) => entriesOf(trip, i, routes[i]));
   const first = Math.min(...trip.days.map(d => toMin(d.start)), 7 * 60);
-  const axisStart = Math.floor(first / 60) * 60;
-  const axisEnd = Math.ceil((Math.max(backBy + 60, ...days.map(d => d.ends + 90))) / 60) * 60;
-  const height = (axisEnd - axisStart) * PX;
+  const axisStart = Math.floor((first - 30) / 60) * 60; // room above the first leave time for "From hotel"
   const y = (m) => (m - axisStart) * PX;
+  days.forEach((info, i) => Object.assign(info, layoutDay(info.entries, y, !trip.days[i].stops.length, toMin(trip.days[i].start))));
+  const lowest = Math.max(...days.map(d => d.bottom)) / PX + axisStart; // pushed-down blocks still fit
+  const axisEnd = Math.ceil((Math.max(backBy + 60, lowest + 60, ...days.map(d => d.ends + 90))) / 60) * 60;
+  const height = (axisEnd - axisStart) * PX;
   const hours = [];
   for (let m = axisStart; m <= axisEnd; m += 60) hours.push(m);
 
@@ -270,7 +307,7 @@ function DayHead({ trip, i, info, backBy, ops }) {
 function DayColumn({ trip, i, info, height, y, backBy, ops, dnd }) {
   const d = trip.days[i];
   const isLast = i === DAYS - 1;
-  const stops = info.entries.filter(e => e.type === 'stop');
+  const stops = info.laid.filter(e => e.type === 'stop');
   const night = isLast ? null : stayOf(trip, i);
   const over = dnd.over && dnd.over !== 'pool' && dnd.over.day === i ? dnd.over : null;
   const carrying = dnd.drag;
@@ -279,8 +316,8 @@ function DayColumn({ trip, i, info, height, y, backBy, ops, dnd }) {
   // Where in the day would a place land? Before the first spot whose middle is below the pointer.
   const indexAt = (e) => {
     const top = e.currentTarget.getBoundingClientRect().top;
-    const m = (e.clientY - top) / PX;
-    const k = stops.findIndex(s => y(s.from) / PX + (s.to - s.from) / 2 > m);
+    const px = e.clientY - top;
+    const k = stops.findIndex(s => s.top + s.h / 2 > px);
     return k < 0 ? stops.length : k;
   };
   const onOver = (e) => {
@@ -305,8 +342,9 @@ function DayColumn({ trip, i, info, height, y, backBy, ops, dnd }) {
     const before = stops[at] && stops[at].place.uid !== c.id ? stops[at].place.uid : rest[stops.slice(0, at).filter(s => s.place.uid !== c.id).length]?.place.uid ?? null;
     ops.move(c.id, i, before);
   };
-  const lineY = over && over.index != null ? (stops[over.index] ? y(stops[over.index].from) - 2 : y(info.ends) + 2) : null;
-  const emptyNightY = y(Math.max(info.ends, toMin(d.start))) + 8;
+  const lastStop = stops[stops.length - 1];
+  const lineY = over && over.index != null ? (stops[over.index] ? stops[over.index].top - 2 : (lastStop ? lastStop.top + lastStop.h + 2 : y(info.ends) + 2)) : null;
+  const emptyNightY = Math.max(y(Math.max(info.ends, toMin(d.start))), info.bottom) + 8;
 
   return (
     <div onDragOver={onOver} onDrop={onDrop} onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) dnd.setOver(null); }}
@@ -323,15 +361,16 @@ function DayColumn({ trip, i, info, height, y, backBy, ops, dnd }) {
         </p>
       )}
 
-      {info.entries.map((e, k) => {
-        if (e.type === 'travel') return d.stops.length ? <TravelBlock key={k} e={e} y={y} fuel={trip.fuel} /> : null;
-        if (e.type === 'leave') return <HotelBlock key={k} kind="leave" hotel={e.hotel} top={y(e.at)} />;
+      {info.laid.map((e, k) => {
+        if (e.hidden) return null;
+        if (e.type === 'travel') return <TravelBlock key={k} e={e} fuel={trip.fuel} />;
+        if (e.type === 'leave') return <HotelBlock key={k} kind="leave" hotel={e.hotel} top={e.top} />;
         if (e.type === 'night') return (
-          <HotelBlock key={k} kind="night" hotel={e.hotel} top={d.stops.length ? y(e.at) : y(toMin(d.start)) + 64} night={i + 1} pinned={!!d.pin}
+          <HotelBlock key={k} kind="night" hotel={e.hotel} top={e.top} night={i + 1} pinned={!!d.pin}
             onPin={() => ops.togglePin(i)} onClear={() => ops.setNight(i, null)}
             onDragStart={dnd.start({ kind: 'hotel', id: e.hotel.uid, from: i })} onDragEnd={dnd.end} />
         );
-        return <StopBlock key={e.place.uid} e={e} y={y} i={i} late={e.to > backBy} ops={ops} dnd={dnd} />;
+        return <StopBlock key={e.place.uid} e={e} i={i} late={e.to > backBy} ops={ops} dnd={dnd} />;
       })}
 
       {!isLast && !night && (
@@ -343,16 +382,16 @@ function DayColumn({ trip, i, info, height, y, backBy, ops, dnd }) {
   );
 }
 
-function StopBlock({ e, y, i, late, ops, dnd }) {
+function StopBlock({ e, i, late, ops, dnd }) {
   const p = e.place;
-  const h = Math.max(30, (e.to - e.from) * PX);
+  const h = e.h;
   const roomy = h >= 84; // tall enough to show its controls; shorter blocks show them on hover / tap
   return (
     <div draggable onDragStart={dnd.start({ kind: 'place', id: p.uid, from: i })} onDragEnd={dnd.end} tabIndex={0}
       className={`group absolute inset-x-1 rounded-[10px] bg-surface shadow-[0_1px_3px_rgba(0,0,0,0.12)] overflow-hidden cursor-grab active:cursor-grabbing
         hover:z-20 focus-within:z-20 hover:min-h-[76px] focus-within:min-h-[76px] focus:min-h-[76px] focus:z-20 outline-none focus:ring-2 focus:ring-tint
         ${late ? 'ring-1 ring-red' : ''} ${dnd.drag?.id === p.uid ? 'opacity-40' : ''}`}
-      style={{ top: y(e.from), height: h }}>
+      style={{ top: e.top, height: h }}>
       <span className="absolute inset-y-0 left-0 w-1" style={{ background: colorOf(p) }} aria-hidden />
       <div className="pl-2.5 pr-1 py-1">
         <div className="flex items-start gap-1">
@@ -372,12 +411,12 @@ function StopBlock({ e, y, i, late, ops, dnd }) {
   );
 }
 
-function TravelBlock({ e, y, fuel }) {
-  const h = Math.max(0, (e.to - e.from) * PX);
+function TravelBlock({ e, fuel }) {
+  const h = e.h;
   const drive = e.leg.km - (e.leg.ferryKm || 0);
   const label = `${fmtDur(Math.round(e.leg.min))} · ${fmtKm(drive)}${e.leg.ferryKm > 0.5 ? ' + ferry' : ''}`;
   return (
-    <div className="absolute left-3 right-1 flex items-center pointer-events-none" style={{ top: y(e.from), height: h }}
+    <div className="absolute left-3 right-1 flex items-center pointer-events-none" style={{ top: e.top, height: h }}
       title={`Drive ${label} · ${peso(drive * fuel.pricePerL / Math.max(1, fuel.kmPerL))} gas`}>
       <span className="absolute left-1.5 inset-y-0.5 border-l-2 border-dotted border-label-3" aria-hidden />
       {h >= 16 && (
@@ -393,7 +432,7 @@ function TravelBlock({ e, y, fuel }) {
 function HotelBlock({ kind, hotel, top, night, pinned, onPin, onClear, onDragStart, onDragEnd }) {
   if (kind !== 'night') {
     return (
-      <div className="absolute inset-x-1 h-[22px] rounded-[8px] flex items-center gap-1 px-2 bg-[rgba(88,86,214,0.14)] text-[#5856D6]" style={{ top: top - 24 }}>
+      <div className="absolute inset-x-1 h-[22px] rounded-[8px] flex items-center gap-1 px-2 bg-[rgba(88,86,214,0.14)] text-[#5856D6]" style={{ top }}>
         <BedDouble className="w-3.5 h-3.5 shrink-0" aria-hidden />
         <span className="min-w-0 truncate text-[11px] font-semibold">From {hotel.name}</span>
       </div>
