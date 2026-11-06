@@ -7,9 +7,9 @@ import dynamic from 'next/dynamic';
 import './trip.css';
 import { X, Car, BedDouble, Ship, Loader2, PiggyBank, ExternalLink, Inbox, CalendarClock, Lock, LockOpen, Plus, MapPin, Clock, StickyNote } from 'lucide-react';
 import { Segmented, Button, useToast } from '../business/ui.jsx';
-import { DAYS, schedule, fmtClock, fmtDur, peso, addDays, placesById, stayOf, nightlyFor, bookingLinks, colorOf, hasSpot, asEntry } from './tripData.js';
+import { DAYS, schedule, fmtClock, fmtDur, peso, addDays, placesById, stayOf, nightlyFor, nightlyMath, roomsFor, bookingLinks, colorOf, hasSpot, asEntry } from './tripData.js';
 import PlaceInfo from './PlaceInfo.jsx';
-import { PlacePhoto, MustStar, HotelForm, PriceCell, DurationPick, postTrip, tripPayload, fmtDay, fmtKm, useGeocode, GeoPick } from './tripUi.jsx';
+import { PlacePhoto, MustStar, HotelForm, PriceCell, UnitPick, DurationPick, postTrip, tripPayload, fmtDay, fmtKm, useGeocode, GeoPick } from './tripUi.jsx';
 
 const TripMap = dynamic(() => import('./TripMap.jsx'), {
   ssr: false,
@@ -96,7 +96,7 @@ function Pool({ trip, setTrip, ops, dnd, entryFor, onOpen }) {
   };
 
   const area = nearPlace?.area?.split(', ').pop();
-  const links = nearPlace ? bookingLinks({ lat: nearPlace.lat, lon: nearPlace.lon, area, checkin: trip.startDate, guests: trip.guests, rooms: Math.max(1, Math.ceil(trip.guests / 2)) }) : null;
+  const links = nearPlace ? bookingLinks({ lat: nearPlace.lat, lon: nearPlace.lon, area, checkin: trip.startDate, guests: trip.guests, rooms: roomsFor(trip.guests) }) : null;
 
   return (
     <section aria-label="Pool" onDrop={drop}
@@ -168,7 +168,7 @@ function Pool({ trip, setTrip, ops, dnd, entryFor, onOpen }) {
         )}
         <EntryForm trip={trip} setTrip={setTrip} preset={entryFor} />
 
-        <Head title="Hotels" note="₱ per night" />
+        <Head title="Hotels" note={`for ${trip.guests} ${trip.guests === 1 ? 'person' : 'people'}`} />
         {hotels.length > 0 && (
           <ul className="px-2 space-y-1.5">
             {hotels.map(h => {
@@ -189,8 +189,12 @@ function Pool({ trip, setTrip, ops, dnd, entryFor, onOpen }) {
                   </div>
                   <div className="flex items-center gap-1 mt-1.5">
                     <PriceCell value={h.price} label={`${h.name} price per night`} onCommit={v => ops.updateHotel(h.uid, { price: v })} />
+                    <UnitPick hotel={h} onChange={p => ops.updateHotel(h.uid, p)} />
                     <MustStar size="sm" on={!!h.must} name={h.name} word="must-stay" onToggle={() => ops.updateHotel(h.uid, { must: !h.must })} />
                   </div>
+                  {nightlyMath(h, trip.guests) && (
+                    <p className="mt-1 px-1 text-footnote text-label-2 tabular">{nightlyMath(h, trip.guests)} = <span className="font-semibold text-label">{peso(nightlyFor(h, trip.guests))}</span> / night</p>
+                  )}
                 </li>
               );
             })}
@@ -431,7 +435,7 @@ function DayColumn({ trip, i, info, height, y, backBy, ops, dnd, onOpen }) {
         if (e.type === 'travel') return <TravelBlock key={k} e={e} fuel={trip.fuel} />;
         if (e.type === 'leave') return <HotelBlock key={k} kind="leave" hotel={e.hotel} top={e.top} />;
         if (e.type === 'night') return (
-          <HotelBlock key={k} kind="night" hotel={e.hotel} top={e.top} night={i + 1} pinned={!!d.pin}
+          <HotelBlock key={k} kind="night" hotel={e.hotel} guests={trip.guests} top={e.top} night={i + 1} pinned={!!d.pin}
             onPin={() => ops.togglePin(i)} onClear={() => ops.setNight(i, null)}
             onDragStart={dnd.start({ kind: 'hotel', id: e.hotel.uid, from: i })} onDragEnd={dnd.end} />
         );
@@ -521,7 +525,7 @@ function TravelBlock({ e, fuel }) {
   );
 }
 
-function HotelBlock({ kind, hotel, top, night, pinned, onPin, onClear, onDragStart, onDragEnd }) {
+function HotelBlock({ kind, hotel, guests, top, night, pinned, onPin, onClear, onDragStart, onDragEnd }) {
   if (kind !== 'night') {
     return (
       <div className="absolute inset-x-1 h-[22px] rounded-[8px] flex items-center gap-1 px-2 bg-[rgba(88,86,214,0.14)] text-[#5856D6]" style={{ top }}>
@@ -539,7 +543,7 @@ function HotelBlock({ kind, hotel, top, night, pinned, onPin, onClear, onDragSta
         <button type="button" onClick={onClear} aria-label={`No hotel night ${night}`} className="w-6 h-5 flex items-center justify-center text-white/80 hover:text-white pressable shrink-0"><X className="w-3.5 h-3.5" aria-hidden /></button>
       </div>
       <div className="flex items-center gap-1 min-w-0">
-        <span className="min-w-0 flex-1 truncate text-[11px] text-white/85 tabular leading-tight">Night {night} · {peso(nightlyFor(hotel))}</span>
+        <span className="min-w-0 flex-1 truncate text-[11px] text-white/85 tabular leading-tight">Night {night} · {peso(nightlyFor(hotel, guests))}</span>
         <button type="button" onClick={onPin} aria-pressed={pinned} aria-label={pinned ? `Unpin night ${night}` : `Pin night ${night}`}
           title={pinned ? 'Pinned: optimizers keep this hotel' : 'Not pinned: optimizers may change it'}
           className={`w-6 h-5 flex items-center justify-center pressable shrink-0 ${pinned ? 'text-white' : 'text-white/60 hover:text-white'}`}>

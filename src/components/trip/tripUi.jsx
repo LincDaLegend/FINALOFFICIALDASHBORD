@@ -9,7 +9,7 @@ import {
 import { Button, Chip } from '../business/ui.jsx';
 import { driveCalibration } from './tripHooks.js';
 import { updateSettings } from '../business/stores.js';
-import { DAYS, addDays, catOf, colorOf, fmtClock, fmtDur, gasCost, peso, stayOf, nightlyFor, hasSpot } from './tripData.js';
+import { DAYS, addDays, catOf, colorOf, fmtClock, fmtDur, gasCost, peso, stayOf, nightlyFor, hasSpot, PRICE_UNITS, unitOf, unitPatch } from './tripData.js';
 
 export const fmtDay = (iso, opts = { weekday: 'short', month: 'short', day: 'numeric' }) =>
   new Date(iso + 'T00:00:00').toLocaleDateString('en-US', opts);
@@ -136,7 +136,7 @@ export const tripPayload = (trip) => {
   people: trip.guests,
   prefs: trip.prefs,
   fuel: trip.fuel,
-  hotels: (trip.hotels || []).map(h => ({ uid: h.uid, name: h.name, area: h.area, lat: h.lat, lon: h.lon, nightly: nightlyFor(h), must: !!h.must })),
+  hotels: (trip.hotels || []).map(h => ({ uid: h.uid, name: h.name, area: h.area, lat: h.lat, lon: h.lon, nightly: nightlyFor(h, trip.guests), must: !!h.must })),
   places: trip.pool.filter(p => !p.custom).map(({ uid, name, area, lat, lon, mins, must }) => ({ uid, name, area, lat, lon, mins, must })),
   days: trip.days.map((d, i) => ({
     date: fmtDay(addDays(trip.startDate, i), { weekday: 'long', month: 'short', day: 'numeric' }),
@@ -355,7 +355,7 @@ export function applyPlan(t, res, asPlace) {
   return { ...t, pool, days };
 }
 
-export const planSig = (trip) => JSON.stringify([trip.pool.map(p => [p.uid, p.mins, p.must, p.at || null]), trip.days.map(d => [d.start, d.stops, d.hotel, !!d.pin]), (trip.hotels || []).map(h => [h.uid, h.price, h.lat, h.lon, !!h.must]), trip.prefs, trip.guests, trip.fuel]);
+export const planSig = (trip) => JSON.stringify([trip.pool.map(p => [p.uid, p.mins, p.must, p.at || null]), trip.days.map(d => [d.start, d.stops, d.hotel, !!d.pin]), (trip.hotels || []).map(h => [h.uid, h.price, h.per || null, h.sleeps || null, h.lat, h.lon, !!h.must]), trip.prefs, trip.guests, trip.fuel]);
 
 
 
@@ -376,6 +376,16 @@ export function PriceCell({ value, onCommit, label }) {
         onKeyDown={e => e.key === 'Enter' && e.currentTarget.blur()}
         className="w-[64px] bg-transparent text-right font-semibold tabular outline-none" />
     </span>
+  );
+}
+
+/** Per room (2/3/4 people), per person, or whole place: with the people count, sets what a night costs. */
+export function UnitPick({ hotel, onChange, label }) {
+  return (
+    <select value={unitOf(hotel)} onChange={e => onChange(unitPatch(e.target.value))} aria-label={label || `${hotel.name} price is`}
+      className="h-9 pl-1.5 rounded-[10px] bg-fill text-footnote font-semibold text-label outline-none focus:ring-2 focus:ring-tint cursor-pointer shrink-0">
+      {PRICE_UNITS.map(u => <option key={u.value} value={u.value}>{u.label}</option>)}
+    </select>
   );
 }
 
@@ -441,7 +451,7 @@ export function GeoPick({ geo, onPick, notFound = null }) {
 
 export function HotelForm({ trip, ops, near, onNear }) {
   const [open, setOpen] = useState(false);
-  const [draft, setDraft] = useState({ name: '', address: '', price: '' });
+  const [draft, setDraft] = useState({ name: '', address: '', price: '', unit: 'room:2' });
   const places = trip.pool.filter(hasSpot);
   const at = places.find(p => p.uid === near);
   const input = 'h-10 px-3 rounded-[10px] bg-fill text-callout outline-none focus:ring-2 focus:ring-tint';
@@ -451,7 +461,7 @@ export function HotelForm({ trip, ops, near, onNear }) {
   const hit = geo.results?.[geo.pick];
   const spot = address && hit ? { lat: hit.lat, lon: hit.lon, area: hit.area || '' } : at ? { lat: at.lat, lon: at.lon, area: at.area } : null;
   const ready = draft.name.trim() && spot && !geo.loading;
-  const close = () => { setOpen(false); setDraft({ name: '', address: '', price: '' }); };
+  const close = () => { setOpen(false); setDraft({ name: '', address: '', price: '', unit: 'room:2' }); };
 
   const add = (e) => {
     e.preventDefault();
@@ -459,7 +469,7 @@ export function HotelForm({ trip, ops, near, onNear }) {
     // Just an option: nights are picked by you (or Cheapest), never filled automatically
     ops.addHotel({
       name: draft.name.trim(), address: address || null, ...spot, pinned: address && hit ? hit.precision : 'near',
-      price: Math.max(0, parseFloat(draft.price) || 0),
+      price: Math.max(0, parseFloat(draft.price) || 0), ...unitPatch(draft.unit),
     });
     close();
   };
@@ -501,7 +511,8 @@ export function HotelForm({ trip, ops, near, onNear }) {
 
       <div className="flex items-center gap-2">
         <input value={draft.price} onChange={e => setDraft(d => ({ ...d, price: e.target.value }))} placeholder="₱ / night" inputMode="numeric" type="number" min={0}
-          aria-label="Price per night for the group" className={`w-[110px] tabular ${input}`} />
+          aria-label="Price per night" className={`w-[96px] tabular ${input}`} />
+        <UnitPick hotel={unitPatch(draft.unit)} label="Price is" onChange={p => setDraft(d => ({ ...d, unit: p.per === 'room' ? `room:${p.sleeps}` : p.per }))} />
         <span className="flex-1" />
         <Button size="sm" variant="gray" type="button" className="!h-10" onClick={close}>Cancel</Button>
         <Button size="sm" type="submit" className="!h-10" disabled={!ready}>Add</Button>

@@ -3,8 +3,8 @@
 // Details for one pool item (a place, your own entry, or a hotel), opened by clicking it.
 import { useEffect, useRef, useState } from 'react';
 import { X, MapPin, ExternalLink, Car, Ship, Clock, BedDouble, Trash2, BookOpen } from 'lucide-react';
-import { DAYS, addDays, bookingLinks, fmtClock, fmtDur, peso, nightlyFor, hasSpot } from './tripData.js';
-import { PlacePhoto, MustStar, DurationPick, PriceCell, fmtDay, fmtKm } from './tripUi.jsx';
+import { DAYS, addDays, bookingLinks, fmtClock, fmtDur, peso, nightlyFor, nightlyMath, roomsFor, hasSpot } from './tripData.js';
+import { PlacePhoto, MustStar, DurationPick, PriceCell, UnitPick, fmtDay, fmtKm } from './tripUi.jsx';
 
 const CAT_NAME = {
   water: 'Falls & water', beach: 'Beach & island', dive: 'Diving & snorkeling', worship: 'Church & temple', landmark: 'Landmark',
@@ -188,7 +188,7 @@ function SpotInfo({ trip, ops, p, when, onClose }) {
 function HotelInfo({ trip, ops, h, onClose }) {
   const nights = trip.days.slice(0, DAYS - 1).flatMap((d, k) => (d.hotel === h.uid ? [k] : []));
   const area = (h.area || '').split(', ').pop();
-  const links = hasSpot(h) ? bookingLinks({ lat: h.lat, lon: h.lon, area, checkin: addDays(trip.startDate, nights[0] ?? 0), guests: trip.guests, rooms: Math.max(1, Math.ceil(trip.guests / 2)) }) : null;
+  const links = hasSpot(h) ? bookingLinks({ lat: h.lat, lon: h.lon, area, checkin: addDays(trip.startDate, nights[0] ?? 0), guests: trip.guests, rooms: h.per === 'room' || !h.per ? roomsFor(trip.guests, h.sleeps) : roomsFor(trip.guests) }) : null;
   const toggleNight = (k) => ops.setNight(k, trip.days[k].hotel === h.uid ? null : h.uid);
 
   return (
@@ -203,11 +203,14 @@ function HotelInfo({ trip, ops, h, onClose }) {
       <div className="rounded-[14px] bg-fill p-3 space-y-3">
         <div className="flex items-center gap-2">
           <PriceCell value={h.price} label={`${h.name} price per night`} onCommit={v => ops.updateHotel(h.uid, { price: v })} />
-          <span className="text-footnote text-label-2">per night</span>
+          <UnitPick hotel={h} onChange={p => ops.updateHotel(h.uid, p)} />
           <span className="ml-auto"><MustStar size="sm" on={!!h.must} name={h.name} word="must-stay" onToggle={() => ops.updateHotel(h.uid, { must: !h.must })} /></span>
         </div>
         <div>
-          <p className="text-footnote text-label-2 mb-1.5">Nights{nights.length ? ` · ${peso(nights.length * nightlyFor(h))} total` : ''}</p>
+          <p className="text-footnote text-label-2 tabular mb-1.5">
+            {nightlyMath(h, trip.guests) ? `${nightlyMath(h, trip.guests)} = ` : ''}<span className="font-semibold text-label">{peso(nightlyFor(h, trip.guests))}</span> / night for {trip.guests}
+            {nights.length ? ` · ${nights.length} night${nights.length === 1 ? '' : 's'} = ${peso(nights.length * nightlyFor(h, trip.guests))}` : ''}
+          </p>
           <div className="flex flex-wrap gap-1.5" role="group" aria-label="Nights at this hotel">
             {trip.days.slice(0, DAYS - 1).map((d, k) => {
               const on = d.hotel === h.uid;

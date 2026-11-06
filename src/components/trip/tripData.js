@@ -162,7 +162,32 @@ export const stayOf = (trip, i) => {
 };
 /** What the group pays per night at a hotel option. */
 /** What the group pays per night at a hotel (you type the total). */
-export const nightlyFor = (hotel) => Math.max(0, +hotel?.price || 0);
+/**
+ * A hotel's price is per room (`per: 'room'`, `sleeps` people each, 2 unless set), per person, or for the
+ * whole place (`per: 'stay'`). nightlyFor turns it into what the group pays per night.
+ */
+export const PRICE_UNITS = [
+  { value: 'room:2', label: '/ room (2)' }, { value: 'room:3', label: '/ room (3)' }, { value: 'room:4', label: '/ room (4)' },
+  { value: 'person', label: '/ person' }, { value: 'stay', label: 'whole place' },
+];
+export const unitOf = (h) => (h?.per === 'person' || h?.per === 'stay' ? h.per : `room:${Math.max(1, +h?.sleeps || 2)}`);
+export const unitPatch = (value) => (value.startsWith('room:') ? { per: 'room', sleeps: +value.slice(5) } : { per: value, sleeps: null });
+export const roomsFor = (guests, sleeps = 2) => Math.max(1, Math.ceil(Math.max(1, guests || 1) / Math.max(1, sleeps || 2)));
+/** What the group pays per night at a hotel, for `guests` people. */
+export const nightlyFor = (hotel, guests = 2) => {
+  const price = Math.max(0, +hotel?.price || 0);
+  if (hotel?.per === 'stay') return price;
+  if (hotel?.per === 'person') return price * Math.max(1, guests || 1);
+  return price * roomsFor(guests, hotel?.sleeps);
+};
+/** "₱1,800 / room × 2 rooms" — how a nightly total was worked out (null when it's just the price). */
+export const nightlyMath = (hotel, guests = 2) => {
+  const price = Math.max(0, +hotel?.price || 0);
+  if (!price || hotel?.per === 'stay') return null;
+  if (hotel?.per === 'person') return `${peso(price)} × ${guests} ${guests === 1 ? 'person' : 'people'}`;
+  const r = roomsFor(guests, hotel?.sleeps);
+  return `${peso(price)} × ${r} room${r === 1 ? '' : 's'}`;
+};
 
 /** Earlier versions priced hotels per room / bed / place; fold that into one nightly total. */
 function flattenHotels(t) {
@@ -170,10 +195,10 @@ function flattenHotels(t) {
   return {
     ...t,
     hotels: (t.hotels || []).map(h => {
-      if (!h.unit && !h.sleeps) return h;
+      if (h.per || (!h.unit && !h.sleeps)) return h; // new-style (per room / person / whole place) or plain
       const sleeps = h.unit === 'bed' ? 1 : Math.max(1, h.sleeps || (h.unit === 'place' ? 4 : 2));
       const { unit, sleeps: _s, kind, estimated, id, ...rest } = h;
-      return { ...rest, price: Math.round((+h.price || 0) * Math.ceil(people / sleeps)) };
+      return { ...rest, per: 'stay', price: Math.round((+h.price || 0) * Math.ceil(people / sleeps)) }; // already a group total
     }),
   };
 }

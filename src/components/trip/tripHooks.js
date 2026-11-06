@@ -223,6 +223,6 @@ export function dayCost(trip, i, route) {
   const min = route.legs.reduce((s, l) => s + l.min, 0);
   const visit = route.pts.filter(p => p.role === 'stop').reduce((s, p) => s + (p.mins || 0), 0);
   const hotel = i < DAYS - 1 ? stayOf(trip, i) : null;
-  const stay = hotel ? nightlyFor(hotel) : 0;
+  const stay = hotel ? nightlyFor(hotel, trip.guests) : 0;
   return { km, ferryKm, min, visit, gas: gasCost(km - ferryKm, trip.fuel), stay, estimated: route.legs.some(l => l.estimated) };
 }
