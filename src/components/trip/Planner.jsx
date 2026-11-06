@@ -54,6 +54,8 @@ function Pool({ trip, setTrip, ops, dnd, entryFor }) {
   const [near, setNear] = useState('');
   const planned = new Set(trip.days.flatMap(d => d.stops));
   const waiting = trip.pool.filter(p => !planned.has(p.uid));
+  const byUid = placesById(trip);
+  const scheduled = trip.days.flatMap((d, day) => d.stops.map(u => byUid[u] && { p: byUid[u], day }).filter(Boolean));
   const hotels = trip.hotels || [];
   const located = trip.pool.filter(hasSpot);
   const nearUid = located.some(p => p.uid === near) ? near : located[located.length - 1]?.uid || '';
@@ -132,6 +134,27 @@ function Pool({ trip, setTrip, ops, dnd, entryFor }) {
           </ul>
         ) : (
           <p className="flex items-center gap-2 px-4 py-2 text-subhead text-label-2"><Inbox className="w-4 h-4" aria-hidden />{trip.pool.length ? 'Everything is on a day.' : 'Add places below.'}</p>
+        )}
+        {scheduled.length > 0 && (
+          <>
+            <Head title="On a day" note={`${scheduled.length}`} />
+            <ul className="px-2 space-y-1">
+              {scheduled.map(({ p, day }) => (
+                <li key={p.uid} draggable onDragStart={dnd.start({ kind: 'place', id: p.uid, from: day })} onDragEnd={dnd.end}
+                  className={`flex items-center gap-2 rounded-[10px] bg-fill/60 p-1.5 pl-2 cursor-grab active:cursor-grabbing transition-opacity ${dnd.drag?.id === p.uid ? 'opacity-40' : ''}`}>
+                  <PlacePhoto place={p} className="w-7 h-7 rounded-[7px]" iconSize={14} />
+                  <span className="min-w-0 flex-1 text-subhead truncate">{p.name}</span>
+                  <select value={day} onChange={e => ops.move(p.uid, e.target.value === '' ? null : +e.target.value)} aria-label={`Day for ${p.name}`}
+                    className="h-7 w-[70px] pl-1.5 rounded-[8px] bg-surface text-footnote font-semibold text-label outline-none focus:ring-2 focus:ring-tint cursor-pointer">
+                    {trip.days.map((_, i) => <option key={i} value={i}>Day {i + 1}</option>)}
+                    <option value="">Unplan</option>
+                  </select>
+                  <button type="button" onClick={() => ops.remove(p.uid)} aria-label={`Remove ${p.name}`}
+                    className="w-7 h-7 flex items-center justify-center text-label-3 hover:text-red-ink pressable shrink-0"><X className="w-4 h-4" aria-hidden /></button>
+                </li>
+              ))}
+            </ul>
+          </>
         )}
         <EntryForm trip={trip} setTrip={setTrip} preset={entryFor} />
 
