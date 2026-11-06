@@ -2,13 +2,13 @@
 
 // One page: the pool (places + hotels you might use) and a timetable of the days.
 // Drag from the pool into a day; travel between entries is added automatically from real drive times.
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import './trip.css';
-import { X, Car, BedDouble, Ship, Loader2, PiggyBank, ExternalLink, Inbox, CalendarClock, Lock, LockOpen } from 'lucide-react';
+import { X, Car, BedDouble, Ship, Loader2, PiggyBank, ExternalLink, Inbox, CalendarClock, Lock, LockOpen, Plus, MapPin, Clock } from 'lucide-react';
 import { Segmented, Button, useToast } from '../business/ui.jsx';
-import { DAYS, schedule, fmtClock, fmtDur, peso, addDays, placesById, stayOf, nightlyFor, bookingLinks, colorOf } from './tripData.js';
-import { PlacePhoto, MustStar, HotelForm, PriceCell, DurationPick, postTrip, tripPayload, fmtDay, fmtKm } from './tripUi.jsx';
+import { DAYS, schedule, fmtClock, fmtDur, peso, addDays, placesById, stayOf, nightlyFor, bookingLinks, colorOf, hasSpot, asEntry } from './tripData.js';
+import { PlacePhoto, MustStar, HotelForm, PriceCell, DurationPick, postTrip, tripPayload, fmtDay, fmtKm, useGeocode, GeoPick } from './tripUi.jsx';
 
 const TripMap = dynamic(() => import('./TripMap.jsx'), {
   ssr: false,
@@ -31,14 +31,15 @@ export default function Planner({ trip, setTrip, ops, routes }) {
   const start = (d) => (e) => { e.dataTransfer.setData('text/plain', `${d.kind}:${d.id}`); e.dataTransfer.effectAllowed = 'move'; setDrag(d); };
   const end = () => { setDrag(null); setOver(null); };
   const dnd = { drag, over, setOver, start, end };
+  const [entryFor, setEntryFor] = useState(null); // { day, n }: a day's "+" opens the entry form for that day
 
   return (
     <div className="space-y-5">
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-[300px_minmax(0,1fr)] items-start">
         <div className="lg:sticky lg:top-5">
-          <Pool trip={trip} setTrip={setTrip} ops={ops} dnd={dnd} />
+          <Pool trip={trip} setTrip={setTrip} ops={ops} dnd={dnd} entryFor={entryFor} />
         </div>
-        <Timetable trip={trip} ops={ops} routes={routes} dnd={dnd} />
+        <Timetable trip={trip} ops={ops} routes={routes} dnd={dnd} onAddEntry={(day) => setEntryFor(e => ({ day, n: (e?.n || 0) + 1 }))} />
       </div>
       <MapCard trip={trip} ops={ops} routes={routes} />
     </div>
@@ -47,14 +48,15 @@ export default function Planner({ trip, setTrip, ops, routes }) {
 
 // ─── Pool ────────────────────────────────────────────────────────────────────
 
-function Pool({ trip, setTrip, ops, dnd }) {
+function Pool({ trip, setTrip, ops, dnd, entryFor }) {
   const toast = useToast();
   const [busy, setBusy] = useState(false);
   const [near, setNear] = useState('');
   const planned = new Set(trip.days.flatMap(d => d.stops));
   const waiting = trip.pool.filter(p => !planned.has(p.uid));
   const hotels = trip.hotels || [];
-  const nearUid = trip.pool.some(p => p.uid === near) ? near : trip.pool[trip.pool.length - 1]?.uid || '';
+  const located = trip.pool.filter(hasSpot);
+  const nearUid = located.some(p => p.uid === near) ? near : located[located.length - 1]?.uid || '';
   const nearPlace = trip.pool.find(p => p.uid === nearUid);
   const nightsOf = (id) => trip.days.slice(0, DAYS - 1).flatMap((d, k) => (d.hotel === id ? [k + 1] : []));
   const isOver = dnd.over === 'pool';
@@ -105,14 +107,19 @@ function Pool({ trip, setTrip, ops, dnd }) {
               <li key={p.uid} draggable onDragStart={dnd.start({ kind: 'place', id: p.uid, from: 'pool' })} onDragEnd={dnd.end}
                 className={`rounded-[12px] bg-fill p-2 cursor-grab active:cursor-grabbing transition-opacity ${dnd.drag?.id === p.uid ? 'opacity-40' : ''}`}>
                 <div className="flex items-center gap-2.5">
-                  <PlacePhoto place={p} className="w-10 h-10 rounded-[9px]" iconSize={18} />
-                  <span className="min-w-0 flex-1 text-subhead font-semibold leading-snug line-clamp-2">{p.name}</span>
+                  <PlacePhoto place={p} className="w-10 h-10 rounded-[9px]" iconSize={18} lookup={!p.custom} />
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-subhead font-semibold leading-snug line-clamp-2">{p.name}</span>
+                    {p.custom && <span className="block text-footnote text-label-2 truncate">{hasSpot(p) ? p.area || 'Own place' : 'Where you are'}</span>}
+                  </span>
                   <button type="button" onClick={() => ops.remove(p.uid)} aria-label={`Remove ${p.name}`}
                     className="w-7 h-7 flex items-center justify-center text-label-3 hover:text-red-ink pressable shrink-0"><X className="w-4 h-4" aria-hidden /></button>
                 </div>
                 <div className="flex items-center gap-1 mt-1.5">
                   <DurationPick mins={p.mins} name={p.name} onChange={mins => ops.update(p.uid, { mins })} />
-                  <MustStar size="sm" on={p.must} name={p.name} onToggle={() => ops.update(p.uid, { must: !p.must })} />
+                  {p.custom
+                    ? <AtPick at={p.at} name={p.name} onChange={at => ops.update(p.uid, { at })} />
+                    : <MustStar size="sm" on={p.must} name={p.name} onToggle={() => ops.update(p.uid, { must: !p.must })} />}
                   {/* Phones can't drag: pick a day instead */}
                   <select value="" onChange={e => e.target.value !== '' && ops.move(p.uid, +e.target.value)} aria-label={`Add ${p.name} to a day`}
                     className="ml-auto h-7 w-[84px] pl-1.5 rounded-[8px] bg-surface text-footnote font-semibold text-tint-ink outline-none focus:ring-2 focus:ring-tint cursor-pointer">
@@ -126,6 +133,7 @@ function Pool({ trip, setTrip, ops, dnd }) {
         ) : (
           <p className="flex items-center gap-2 px-4 py-2 text-subhead text-label-2"><Inbox className="w-4 h-4" aria-hidden />{trip.pool.length ? 'Everything is on a day.' : 'Add places below.'}</p>
         )}
+        <EntryForm trip={trip} setTrip={setTrip} preset={entryFor} />
 
         <Head title="Hotels" note="₱ per night" />
         {hotels.length > 0 && (
@@ -194,11 +202,11 @@ function entriesOf(trip, i, route) {
   pts.forEach((p, k) => {
     if (k > 0) {
       const leg = legs[k - 1] || { min: 0, km: 0 };
-      out.push({ type: 'travel', from: times[k - 1].leave, to: times[k].arrive, leg });
+      out.push({ type: 'travel', from: times[k - 1].leave, to: times[k].reach, leg });
     }
     if (p.role === 'from') out.push({ type: 'leave', at: times[k].leave, hotel: p });
     else if (p.role === 'to') out.push({ type: 'night', at: times[k].arrive, hotel: p });
-    else out.push({ type: 'stop', from: times[k].arrive, to: times[k].leave, place: p });
+    else out.push({ type: 'stop', from: times[k].arrive, to: times[k].leave, place: p, behind: p.at ? Math.max(0, times[k].reach - toMin(p.at)) : 0 });
   });
   const last = times[times.length - 1];
   const ends = last ? (pts[pts.length - 1].role === 'to' ? last.arrive : last.leave) : toMin(day.start);
@@ -240,7 +248,7 @@ function layoutDay(entries, y, freeDay, start) {
   return { laid: out, bottom: cursor };
 }
 
-function Timetable({ trip, ops, routes, dnd }) {
+function Timetable({ trip, ops, routes, dnd, onAddEntry }) {
   const backBy = toMin(trip.prefs.backBy || '21:00');
   const days = trip.days.map((_, i) => entriesOf(trip, i, routes[i]));
   const first = Math.min(...trip.days.map(d => toMin(d.start)), 7 * 60);
@@ -263,7 +271,7 @@ function Timetable({ trip, ops, routes, dnd }) {
         <div className="grid" style={{ gridTemplateColumns: `44px repeat(${DAYS}, minmax(150px, 1fr))`, minWidth: 44 + DAYS * 150 }}>
           {/* Header row */}
           <div className="sticky left-0 z-20 bg-surface" />
-          {trip.days.map((d, i) => <DayHead key={i} trip={trip} i={i} info={days[i]} backBy={backBy} ops={ops} />)}
+          {trip.days.map((d, i) => <DayHead key={i} trip={trip} i={i} info={days[i]} backBy={backBy} ops={ops} onAddEntry={onAddEntry} />)}
 
           {/* Time axis */}
           <div className="sticky left-0 z-20 bg-surface relative shadow-[0.5px_0_0_var(--separator)]" style={{ height }}>
@@ -282,12 +290,16 @@ function Timetable({ trip, ops, routes, dnd }) {
   );
 }
 
-function DayHead({ trip, i, info, backBy, ops }) {
+function DayHead({ trip, i, info, backBy, ops, onAddEntry }) {
   const d = trip.days[i];
   const late = d.stops.length > 0 && info.ends > backBy;
   return (
     <div id={`day-col-${i}`} className="px-2 pb-2 snap-start min-w-0">
-      <p className="text-headline">Day {i + 1} <span className="text-subhead font-normal text-label-2">· {fmtDay(addDays(trip.startDate, i), { weekday: 'short', day: 'numeric' })}</span></p>
+      <div className="flex items-center gap-1">
+        <p className="text-headline min-w-0 flex-1 truncate">Day {i + 1} <span className="text-subhead font-normal text-label-2">· {fmtDay(addDays(trip.startDate, i), { weekday: 'short', day: 'numeric' })}</span></p>
+        <button type="button" onClick={() => onAddEntry(i)} aria-label={`Add an entry to Day ${i + 1}`} title="Add entry"
+          className="w-7 h-7 -mr-1 rounded-full flex items-center justify-center text-tint-ink hover:bg-tint-soft pressable shrink-0"><Plus className="w-4 h-4" strokeWidth={2.5} aria-hidden /></button>
+      </div>
       <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-0.5">
         <label className="flex items-center gap-1 text-footnote text-label-2">
           Leave
@@ -371,7 +383,7 @@ function DayColumn({ trip, i, info, height, y, backBy, ops, dnd }) {
             onPin={() => ops.togglePin(i)} onClear={() => ops.setNight(i, null)}
             onDragStart={dnd.start({ kind: 'hotel', id: e.hotel.uid, from: i })} onDragEnd={dnd.end} />
         );
-        return <StopBlock key={e.place.uid} e={e} i={i} late={e.to > backBy} ops={ops} dnd={dnd} />;
+        return <StopBlock key={e.place.uid} e={e} i={i} late={e.to > backBy || e.behind > 0} ops={ops} dnd={dnd} />;
       })}
 
       {!isLast && !night && (
@@ -398,14 +410,19 @@ function StopBlock({ e, i, late, ops, dnd }) {
         <div className="flex items-start gap-1">
           <span className="min-w-0 flex-1">
             <span className={`block text-footnote font-semibold leading-tight ${roomy ? 'line-clamp-2' : 'truncate'}`}>{p.name}</span>
-            <span className={`block text-[11px] tabular whitespace-nowrap ${late ? 'text-red-ink font-semibold' : 'text-label-2'}`}>{fmtRange(e.from, e.to)}</span>
+            <span className={`flex items-center gap-0.5 text-[11px] tabular whitespace-nowrap ${late ? 'text-red-ink font-semibold' : 'text-label-2'}`}
+              title={p.at ? (e.behind ? `Set for ${fmtClock(toMin(p.at))}: ${fmtDur(e.behind)} late` : `Set for ${fmtClock(toMin(p.at))}`) : undefined}>
+              {p.at && <Clock className="w-3 h-3 shrink-0" aria-label="Fixed time" />}{fmtRange(e.from, e.to)}
+            </span>
           </span>
           <button type="button" onClick={() => ops.move(p.uid, null)} aria-label={`Back to pool: ${p.name}`} title="Back to pool"
             className="w-6 h-6 -mt-0.5 flex items-center justify-center text-label-3 hover:text-red-ink pressable shrink-0"><X className="w-3.5 h-3.5" aria-hidden /></button>
         </div>
         <div className={`items-center gap-0.5 mt-1 ${roomy ? 'flex' : 'hidden group-hover:flex group-focus-within:flex group-focus:flex'}`}>
           <DurationPick mins={p.mins} name={p.name} onChange={mins => ops.update(p.uid, { mins })} />
-          <MustStar size="sm" on={p.must} name={p.name} onToggle={() => ops.update(p.uid, { must: !p.must })} />
+          {p.custom
+            ? <AtPick at={p.at} name={p.name} onChange={at => ops.update(p.uid, { at })} />
+            : <MustStar size="sm" on={p.must} name={p.name} onToggle={() => ops.update(p.uid, { must: !p.must })} />}
         </div>
       </div>
     </div>
@@ -483,8 +500,117 @@ function MapCard({ trip, ops, routes }) {
   return (
     <section className="rounded-[18px] bg-surface p-3 sm:p-4 space-y-3" aria-label="Map">
       <Segmented label="Map day" size="sm" value={day} onChange={setDay} options={trip.days.map((_, i) => ({ value: i, label: `Day ${i + 1}` }))} />
-      <TripMap points={routes[day].pts} line={routes[day].line}
-        extras={waiting.map(p => ({ ...p, id: p.uid }))} onPick={(p) => ops.move(p.uid, day)} />
+      <TripMap points={routes[day].pts.filter(p => !p.here)} line={routes[day].line}
+        extras={waiting.filter(hasSpot).map(p => ({ ...p, id: p.uid }))} onPick={(p) => ops.move(p.uid, day)} />
     </section>
+  );
+}
+
+// ─── Custom entries ──────────────────────────────────────────────────────────
+
+/** Optional fixed start time; empty = whenever you get there. */
+function AtPick({ at, name, onChange }) {
+  return (
+    <label className="relative flex items-center" title="Fixed start time (optional)">
+      <Clock className={`absolute left-1.5 w-3 h-3 pointer-events-none ${at ? 'text-tint-ink' : 'text-label-3'}`} aria-hidden />
+      <input type="time" value={at || ''} onChange={e => onChange(e.target.value || null)} aria-label={`Start time for ${name}`}
+        className={`h-7 w-[92px] pl-5 pr-0.5 rounded-[8px] bg-fill text-footnote font-semibold tabular outline-none focus:ring-2 focus:ring-tint ${at ? 'text-label' : 'text-label-3'}`} />
+    </label>
+  );
+}
+
+const ENTRY_IDEAS = ['Lunch', 'Dinner', 'Check-in', 'Check-out', 'Rest', 'Flight', 'Shopping'];
+
+/** Add your own timetable entry: lunch, check-in, a flight… with an optional place and fixed time. */
+function EntryForm({ trip, setTrip, preset }) {
+  const toast = useToast();
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState({ name: '', mins: 60, at: '', day: '', address: '' });
+  const box = useRef(null);
+  const address = draft.address.trim();
+  const [geo, setPick] = useGeocode(draft.name.trim(), address);
+  const hit = address ? geo.results?.[geo.pick] : null;
+  const input = 'h-10 px-3 rounded-[10px] bg-fill text-callout outline-none focus:ring-2 focus:ring-tint';
+  const ready = draft.name.trim() && (!address || (hit && !geo.loading));
+
+  // A day's "+" opens the form for that day
+  useEffect(() => {
+    if (!preset) return;
+    setOpen(true);
+    setDraft(d => ({ ...d, day: String(preset.day) }));
+    requestAnimationFrame(() => box.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }));
+  }, [preset]);
+
+  const close = () => { setOpen(false); setDraft({ name: '', mins: 60, at: '', day: '', address: '' }); };
+  const add = (e) => {
+    e.preventDefault();
+    if (!ready) return;
+    const entry = asEntry({ name: draft.name.trim(), mins: draft.mins, at: draft.at, spot: hit ? { lat: hit.lat, lon: hit.lon, area: hit.area || hit.label } : null });
+    const day = draft.day === '' ? null : +draft.day;
+    setTrip(t => {
+      const days = t.days.map((d, i) => {
+        if (i !== day) return d;
+        // A fixed-time entry goes before the first spot that would start after it
+        let at = d.stops.length;
+        if (entry.at) {
+          const byId = Object.fromEntries(t.pool.map(p => [p.uid, p]));
+          let clock = toMin(d.start);
+          for (let k = 0; k < d.stops.length; k++) {
+            if (clock >= toMin(entry.at)) { at = k; break; }
+            clock += byId[d.stops[k]]?.mins || 0;
+          }
+        }
+        return { ...d, stops: [...d.stops.slice(0, at), entry.uid, ...d.stops.slice(at)] };
+      });
+      return { ...t, pool: [...t.pool, entry], days };
+    });
+    toast(day == null ? 'Entry added to the pool' : `Entry added to Day ${day + 1}`, <CalendarClock className="w-4 h-4 text-tint" aria-hidden />);
+    close();
+  };
+
+  if (!open) {
+    return (
+      <button type="button" onClick={() => setOpen(true)}
+        className="w-full flex items-center gap-3 pl-4 pr-3 py-3 text-left text-tint-ink font-semibold row-press">
+        <span className="w-10 h-10 rounded-[10px] bg-tint-soft flex items-center justify-center shrink-0"><Plus className="w-5 h-5" strokeWidth={2.5} aria-hidden /></span>
+        Add entry
+      </button>
+    );
+  }
+
+  return (
+    <form ref={box} onSubmit={add} className="mx-2 my-2 p-3 space-y-2 rounded-[12px] bg-surface-2">
+      <input autoFocus value={draft.name} onChange={e => setDraft(d => ({ ...d, name: e.target.value }))} placeholder="Lunch, check-in, flight…" aria-label="Entry name"
+        maxLength={60} className={`w-full ${input}`} />
+      {!draft.name && (
+        <div className="flex flex-wrap gap-1">
+          {ENTRY_IDEAS.map(n => (
+            <button key={n} type="button" onClick={() => setDraft(d => ({ ...d, name: n }))}
+              className="h-7 px-2.5 rounded-full bg-fill text-footnote font-medium text-label-2 hover:text-label pressable">{n}</button>
+          ))}
+        </div>
+      )}
+      <div className="flex flex-wrap items-center gap-1.5">
+        <DurationPick mins={draft.mins} name="this entry" onChange={mins => setDraft(d => ({ ...d, mins }))} />
+        <AtPick at={draft.at} name="this entry" onChange={at => setDraft(d => ({ ...d, at: at || '' }))} />
+        <select value={draft.day} onChange={e => setDraft(d => ({ ...d, day: e.target.value }))} aria-label="Day"
+          className="h-7 pl-1.5 rounded-[8px] bg-fill text-footnote font-semibold text-tint-ink outline-none focus:ring-2 focus:ring-tint cursor-pointer">
+          <option value="">Pool</option>
+          {trip.days.map((_, i) => <option key={i} value={i}>Day {i + 1}</option>)}
+        </select>
+      </div>
+      <label className="relative block">
+        <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-label-2" aria-hidden />
+        <input value={draft.address} onChange={e => setDraft(d => ({ ...d, address: e.target.value }))}
+          placeholder="Where (optional)" aria-label="Entry address" className={`w-full pl-9 ${input}`} />
+      </label>
+      {address
+        ? <GeoPick geo={geo} onPick={setPick} notFound={<p className="px-1 text-subhead text-orange-ink">Not found · clear it to use where you are</p>} />
+        : <p className="px-1 text-footnote text-label-2">Blank: happens where you are, no extra driving.</p>}
+      <div className="flex items-center justify-end gap-2">
+        <Button size="sm" variant="gray" type="button" className="!h-10" onClick={close}>Cancel</Button>
+        <Button size="sm" type="submit" className="!h-10" disabled={!ready}>Add</Button>
+      </div>
+    </form>
   );
 }

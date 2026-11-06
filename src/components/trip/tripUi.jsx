@@ -4,11 +4,11 @@
 import { useEffect, useState } from 'react';
 import {
   X, Plus, Check, Minus, BedDouble, MapPin, Droplets, TreePalm, Church, Landmark, Mountain, Utensils, ShoppingBag,
-  Plane, Trees, Fish, Users, Star, CircleAlert, ArrowRight, Loader2, Lock, LockOpen,
+  Plane, Trees, Fish, Users, Star, CircleAlert, ArrowRight, Loader2, Lock, LockOpen, CalendarClock,
 } from 'lucide-react';
 import { Button, Chip } from '../business/ui.jsx';
 import { updateSettings } from '../business/stores.js';
-import { DAYS, addDays, catOf, colorOf, fmtClock, fmtDur, gasCost, peso, stayOf, nightlyFor } from './tripData.js';
+import { DAYS, addDays, catOf, colorOf, fmtClock, fmtDur, gasCost, peso, stayOf, nightlyFor, hasSpot } from './tripData.js';
 
 export const fmtDay = (iso, opts = { weekday: 'short', month: 'short', day: 'numeric' }) =>
   new Date(iso + 'T00:00:00').toLocaleDateString('en-US', opts);
@@ -19,7 +19,7 @@ export const clock = (hhmm) => fmtClock(+hhmm.slice(0, 2) * 60 + +hhmm.slice(3, 
 
 export const CAT_ICON = {
   water: Droplets, beach: TreePalm, dive: Fish, worship: Church, landmark: Landmark, view: Mountain,
-  food: Utensils, shop: ShoppingBag, transport: Plane, park: Trees, stay: BedDouble, pin: MapPin,
+  food: Utensils, shop: ShoppingBag, transport: Plane, park: Trees, stay: BedDouble, pin: MapPin, custom: CalendarClock,
 };
 
 // Photos come from Wikipedia / Wikimedia Commons via /api/trip?kind=photo; remembered per browser
@@ -58,7 +58,7 @@ function usePhoto(place, enabled = true) {
 
 /** A photo of the place, or its category colour + glyph while loading / when there's no photo. */
 export function PlacePhoto({ place, className = '', iconSize = 22, lookup = true, children }) {
-  const ph = usePhoto(place, lookup);
+  const ph = usePhoto(place, lookup && !place.custom && hasSpot(place));
   const [loaded, setLoaded] = useState(false);
   const [broken, setBroken] = useState(false);
   const Icon = CAT_ICON[place.cat || catOf(place)] || MapPin;
@@ -120,21 +120,49 @@ export function PeopleStepper({ value, onChange }) {
 
 // ─── Talking to /api/trip ────────────────────────────────────────────────────
 
-export const tripPayload = (trip) => ({
+/** Minutes of custom entries on each day (the optimizers plan around them instead of moving them). */
+const customMins = (trip) => {
+  const c = new Map(trip.pool.filter(p => p.custom).map(p => [p.uid, p.mins]));
+  return trip.days.map(d => d.stops.reduce((s, u) => s + (c.get(u) || 0), 0));
+};
+const shiftClock = (hhmm, by) => { const [h, m] = (hhmm || '08:00').split(':').map(Number); const t = Math.min(23 * 60 + 59, Math.max(0, h * 60 + (m || 0) + by)); return `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`; };
+
+export const tripPayload = (trip) => {
+  const extra = customMins(trip);
+  const custom = new Set(trip.pool.filter(p => p.custom).map(p => p.uid));
+  return {
   people: trip.guests,
   prefs: trip.prefs,
   fuel: trip.fuel,
   hotels: (trip.hotels || []).map(h => ({ uid: h.uid, name: h.name, area: h.area, lat: h.lat, lon: h.lon, nightly: nightlyFor(h), must: !!h.must })),
-  places: trip.pool.map(({ uid, name, area, lat, lon, mins, must }) => ({ uid, name, area, lat, lon, mins, must })),
+  places: trip.pool.filter(p => !p.custom).map(({ uid, name, area, lat, lon, mins, must }) => ({ uid, name, area, lat, lon, mins, must })),
   days: trip.days.map((d, i) => ({
     date: fmtDay(addDays(trip.startDate, i), { weekday: 'long', month: 'short', day: 'numeric' }),
-    start: d.start,
-    order: d.stops,
+    start: shiftClock(d.start, extra[i]), // the day's custom entries use up this much time
+    order: d.stops.filter(u => !custom.has(u)),
     hotel: i < DAYS - 1 ? d.hotel : null,
     pin: i < DAYS - 1 && !!d.hotel && !!d.pin,
     stay: (() => { const h = i < DAYS - 1 ? stayOf(trip, i) : null; return h ? { name: h.name, area: h.area, lat: h.lat, lon: h.lon } : null; })(),
   })),
-});
+  };
+};
+
+/** Put custom entries back into a plan from /api/trip: same day, same position, and the real leave time. */
+export function restoreCustom(trip, res) {
+  if (!res?.days) return res;
+  const extra = customMins(trip);
+  const byId = Object.fromEntries(trip.pool.map(p => [p.uid, p]));
+  return {
+    ...res,
+    days: res.days.map((d, i) => {
+      const day = trip.days[i];
+      if (!day) return d;
+      const stops = [...(d.stops || [])];
+      day.stops.forEach((u, k) => { const p = byId[u]; if (p?.custom) stops.splice(Math.min(k, stops.length), 0, { uid: u, mins: p.mins }); });
+      return { ...d, stops, start: d.start ? shiftClock(d.start, -extra[i]) : d.start };
+    }),
+  };
+}
 
 export async function postTrip(body, key) {
   const r = await fetch('/api/trip', {
@@ -325,7 +353,7 @@ export function applyPlan(t, res, asPlace) {
   return { ...t, pool, days };
 }
 
-export const planSig = (trip) => JSON.stringify([trip.pool.map(p => [p.uid, p.mins, p.must]), trip.days.map(d => [d.start, d.stops, d.hotel, !!d.pin]), (trip.hotels || []).map(h => [h.uid, h.price, h.lat, h.lon, !!h.must]), trip.prefs, trip.guests, trip.fuel]);
+export const planSig = (trip) => JSON.stringify([trip.pool.map(p => [p.uid, p.mins, p.must, p.at || null]), trip.days.map(d => [d.start, d.stops, d.hotel, !!d.pin]), (trip.hotels || []).map(h => [h.uid, h.price, h.lat, h.lon, !!h.must]), trip.prefs, trip.guests, trip.fuel]);
 
 
 
@@ -365,28 +393,58 @@ export function PinButton({ on, onToggle, night, size = 'md' }) {
 const PRECISION = { exact: ['green', 'Exact'], street: ['blue', 'Street'], town: ['orange', 'Town only'] };
 
 /** "Add hotel" button that opens a small form: name, address (found on the map as you type), ₱ per night. */
-export function HotelForm({ trip, ops, near, onNear }) {
-  const [open, setOpen] = useState(false);
-  const [draft, setDraft] = useState({ name: '', address: '', price: '' });
+/** Looks an address up a moment after typing stops (OSM asks for ≤1 request a second). */
+export function useGeocode(name, address) {
   const [geo, setGeo] = useState({ loading: false, results: null, pick: 0 });
-  const places = trip.pool;
-  const at = places.find(p => p.uid === near);
-  const input = 'h-10 px-3 rounded-[10px] bg-fill text-callout outline-none focus:ring-2 focus:ring-tint';
-  const address = draft.address.trim();
-
-  // Look the address up a moment after typing stops (OSM asks for ≤1 request a second)
   useEffect(() => {
     if (address.length < 3) { setGeo({ loading: false, results: null, pick: 0 }); return; }
     setGeo(g => ({ ...g, loading: true }));
     const ctl = new AbortController();
     const t = setTimeout(() => {
-      fetch(`/api/trip?${new URLSearchParams({ kind: 'geocode', name: draft.name.trim(), address })}`, { signal: ctl.signal })
+      fetch(`/api/trip?${new URLSearchParams({ kind: 'geocode', name, address })}`, { signal: ctl.signal })
         .then(r => r.json())
         .then(d => setGeo({ loading: false, results: d.results || [], pick: 0 }))
         .catch(e => { if (e.name !== 'AbortError') setGeo({ loading: false, results: [], pick: 0 }); });
     }, 800);
     return () => { clearTimeout(t); ctl.abort(); };
-  }, [address, draft.name]);
+  }, [address, name]);
+  return [geo, (pick) => setGeo(g => ({ ...g, pick }))];
+}
+
+/** The map matches for an address, one picked. */
+export function GeoPick({ geo, onPick, notFound = null }) {
+  if (geo.loading) return <p className="flex items-center gap-2 px-1 text-subhead text-label-2"><Loader2 className="w-4 h-4 animate-spin" aria-hidden />Finding it on the map…</p>;
+  if (!geo.results) return null;
+  if (!geo.results.length) return notFound;
+  return (
+    <ul className="rounded-[10px] bg-surface overflow-hidden group-list" role="radiogroup" aria-label="Map match">
+      {geo.results.map((r, k) => {
+        const [tone, word] = PRECISION[r.precision] || PRECISION.town;
+        return (
+          <li key={k}>
+            <button type="button" role="radio" aria-checked={k === geo.pick} onClick={() => onPick(k)}
+              className="w-full flex items-center gap-2.5 px-3 py-2 text-left row-press">
+              <span className={`w-4 h-4 rounded-full shrink-0 flex items-center justify-center ${k === geo.pick ? 'bg-tint' : 'shadow-[inset_0_0_0_1.5px_var(--separator)]'}`}>
+                {k === geo.pick && <Check className="w-3 h-3 text-white" strokeWidth={3.5} aria-hidden />}
+              </span>
+              <span className="min-w-0 flex-1 text-subhead truncate">{r.label}</span>
+              <Chip tone={tone}>{word}</Chip>
+            </button>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+export function HotelForm({ trip, ops, near, onNear }) {
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState({ name: '', address: '', price: '' });
+  const places = trip.pool.filter(hasSpot);
+  const at = places.find(p => p.uid === near);
+  const input = 'h-10 px-3 rounded-[10px] bg-fill text-callout outline-none focus:ring-2 focus:ring-tint';
+  const address = draft.address.trim();
+  const [geo, setPick] = useGeocode(draft.name.trim(), address);
 
   const hit = geo.results?.[geo.pick];
   const spot = address && hit ? { lat: hit.lat, lon: hit.lon, area: hit.area || '' } : at ? { lat: at.lat, lon: at.lon, area: at.area } : null;
@@ -431,31 +489,13 @@ export function HotelForm({ trip, ops, near, onNear }) {
 
       {!address ? (
         <div className="flex items-center gap-2">{nearSelect}</div>
-      ) : geo.loading ? (
-        <p className="flex items-center gap-2 px-1 text-subhead text-label-2"><Loader2 className="w-4 h-4 animate-spin" aria-hidden />Finding it on the map…</p>
-      ) : geo.results?.length ? (
-        <ul className="rounded-[10px] bg-surface overflow-hidden group-list" role="radiogroup" aria-label="Map match">
-          {geo.results.map((r, k) => {
-            const [tone, word] = PRECISION[r.precision] || PRECISION.town;
-            return (
-              <li key={k}>
-                <button type="button" role="radio" aria-checked={k === geo.pick} onClick={() => setGeo(g => ({ ...g, pick: k }))}
-                  className="w-full flex items-center gap-2.5 px-3 py-2 text-left row-press">
-                  <span className={`w-4 h-4 rounded-full shrink-0 flex items-center justify-center ${k === geo.pick ? 'bg-tint' : 'shadow-[inset_0_0_0_1.5px_var(--separator)]'}`}>
-                    {k === geo.pick && <Check className="w-3 h-3 text-white" strokeWidth={3.5} aria-hidden />}
-                  </span>
-                  <span className="min-w-0 flex-1 text-subhead truncate">{r.label}</span>
-                  <Chip tone={tone}>{word}</Chip>
-                </button>
-              </li>
-            );
-          })}
-        </ul>
-      ) : geo.results ? (
-        <div className="flex items-center gap-2">
-          <span className="text-subhead text-orange-ink shrink-0 px-1">Not found · pin</span>{nearSelect}
-        </div>
-      ) : null}
+      ) : (
+        <GeoPick geo={geo} onPick={setPick} notFound={
+          <div className="flex items-center gap-2">
+            <span className="text-subhead text-orange-ink shrink-0 px-1">Not found · pin</span>{nearSelect}
+          </div>
+        } />
+      )}
 
       <div className="flex items-center gap-2">
         <input value={draft.price} onChange={e => setDraft(d => ({ ...d, price: e.target.value }))} placeholder="₱ / night" inputMode="numeric" type="number" min={0}

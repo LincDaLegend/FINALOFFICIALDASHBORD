@@ -40,7 +40,7 @@ export const REGIONS = ['City & Mactan', 'South', 'North'];
 // Apple Maps-style category colours (icons live in CebuTrip.jsx)
 export const CAT_COLOR = {
   water: '#32ADE6', beach: '#00B8B0', dive: '#0A84FF', worship: '#A2845E', landmark: '#AF52DE', view: '#34C759',
-  food: '#FF9500', shop: '#FF2D55', transport: '#8E8E93', park: '#30A14E', stay: '#5856D6', pin: '#FF3B30',
+  food: '#FF9500', shop: '#FF2D55', transport: '#8E8E93', park: '#30A14E', stay: '#5856D6', pin: '#FF3B30', custom: '#64748B',
 };
 export const colorOf = (p) => CAT_COLOR[p.cat || catOf(p)] || CAT_COLOR.pin;
 
@@ -194,8 +194,23 @@ export function dayPoints(trip, i) {
   if (prevStay) pts.push({ ...prevStay, role: 'from' });
   stopsOf(trip, i).forEach(s => pts.push({ ...s, role: 'stop' }));
   if (tonight) pts.push({ ...tonight, role: 'to' });
+  // A custom entry without a place happens wherever you are then (or where you go next): no extra driving
+  pts.forEach((p, k) => {
+    if (hasSpot(p)) return;
+    const near = [...pts.slice(0, k)].reverse().find(hasSpot) || pts.slice(k + 1).find(hasSpot) || CEBU_CITY;
+    pts[k] = { ...p, lat: near.lat, lon: near.lon, here: true };
+  });
   return pts;
 }
+
+export const hasSpot = (p) => Number.isFinite(p?.lat) && Number.isFinite(p?.lon);
+const CEBU_CITY = { lat: 10.3157, lon: 123.8854 };
+
+/** A custom timetable entry: lunch, check-in, a flight… Optional place (lat/lon) and fixed start time (`at`, HH:MM). */
+export const asEntry = ({ name, mins, at, spot }) => ({
+  uid: uid(), id: `c-${uid()}`, name, area: spot?.area || '', lat: spot?.lat ?? null, lon: spot?.lon ?? null,
+  cat: 'custom', custom: true, mins, at: at || null, must: false, wiki: null, tag: null,
+});
 
 export const routeKey = (pts) => pts.map(p => `${p.lon.toFixed(5)},${p.lat.toFixed(5)}`).join(';');
 
@@ -224,9 +239,11 @@ export function schedule(day, pts, legs) {
   let t = toMin(day.start);
   return pts.map((p, k) => {
     if (k > 0) t += legs?.[k - 1]?.min ?? 0;
+    const reach = t; // when you get there
+    if (p.role === 'stop' && p.at) t = Math.max(t, toMin(p.at)); // early for a fixed time: wait
     const arrive = t;
     if (p.role === 'stop') t += p.mins;
-    return { arrive, leave: t };
+    return { reach, arrive, leave: t };
   });
 }
 

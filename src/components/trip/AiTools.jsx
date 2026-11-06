@@ -6,7 +6,7 @@ import { WandSparkles, Loader2, Route, PiggyBank } from 'lucide-react';
 import { Button, useToast } from '../business/ui.jsx';
 import { useSettings } from '../business/stores.js';
 import { asPlace } from './tripData.js';
-import { KeyPrompt, ErrorLine, PlanPreview, postTrip, tripPayload, isKeyProblem, applyPlan, planSig } from './tripUi.jsx';
+import { KeyPrompt, ErrorLine, PlanPreview, postTrip, tripPayload, isKeyProblem, applyPlan, planSig, restoreCustom } from './tripUi.jsx';
 
 
 // ─── AI organiser + constraints ──────────────────────────────────────────────
@@ -25,7 +25,7 @@ export function AiOrganizer({ trip, setTrip, ops }) {
       const body = kind === 'route' ? { ...tripPayload(trip), mode: 'route', scope: 'trip', arrange: true, metric: 'km' }
         : kind === 'cost' ? { ...tripPayload(trip), mode: 'cost' }
         : tripPayload(trip);
-      const res = await postTrip(body, kind === 'ai' ? key : undefined);
+      const res = restoreCustom(trip, await postTrip(body, kind === 'ai' ? key : undefined));
       setState({ loading: null, res: { ...res, kind }, error: null, code: null, sig });
     } catch (e) {
       setState({ loading: null, res: null, error: e.message, code: e.code, sig });
