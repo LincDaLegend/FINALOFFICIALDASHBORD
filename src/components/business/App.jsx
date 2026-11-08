@@ -7,6 +7,7 @@ import FindCards from './FindCards.jsx';
 import Watchlist from './Watchlist.jsx';
 import Settings from './Settings.jsx';
 import CebuTrip from '../trip/CebuTrip.jsx'; // temporary
+import BusinessDashboard from './biz/BusinessDashboard.jsx';
 import { ToastProvider } from './ui.jsx';
 import { useBusinessStore } from './store.js';
 import { useWatchlist } from './watchlistHooks.js';
@@ -21,7 +22,7 @@ function initialTab() {
 
 export default function BusinessApp() {
   const [activeTab, setTab] = useState(initialTab);
-  const [data, update] = useBusinessStore(); // older records — kept for backup/restore
+  const [data, update] = useBusinessStore(); // inventory + sales (Business tab), also backed up from Settings
   const { items } = useWatchlist();
   const reduce = useReducedMotion();
 
@@ -39,6 +40,7 @@ export default function BusinessApp() {
   };
 
   const page = {
+    business:  <BusinessDashboard data={data} update={update} />,
     search:    <FindCards setActiveTab={setActiveTab} />,
     watchlist: <Watchlist setActiveTab={setActiveTab} />,
     trip:      <CebuTrip />,

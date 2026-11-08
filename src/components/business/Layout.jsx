@@ -1,11 +1,12 @@
 'use client';
 
-import { Search, Heart, Settings, Plane, FlaskConical } from 'lucide-react';
+import { Search, Heart, Settings, Plane, FlaskConical, Briefcase } from 'lucide-react';
 
 // Watchlist is hidden for now; set SHOW_WATCHLIST to true to bring it back (page + hearts)
 export const SHOW_WATCHLIST = false;
 
 export const TABS = [
+  { id: 'business',  label: 'Business',    icon: Briefcase },
   { id: 'search',    label: 'eBay Search', icon: Search },
   ...(SHOW_WATCHLIST ? [{ id: 'watchlist', label: 'Watchlist', icon: Heart }] : []),
   { id: 'trip',      label: 'Cebu Trip',   icon: Plane }, // temporary
