@@ -11,6 +11,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.81.0",
     "@vercel/blob": "^2.8.2",
+    "html-to-image": "1.11.11",
     "lucide-react": "^1.8.0",
     "maplibre-gl": "^6.15.0",
     "motion": "^14.9.0",

@@ -521,7 +521,7 @@ export function HotelForm({ trip, ops, near, onNear }) {
   );
 }
 
-const DURATIONS = [15, 30, 45, 60, 90, 120, 150, 180, 210, 240, 300, 360, 420, 480];
+const DURATIONS = [15, 30, 45, 60, 90, 120, 150, 180, 210, 240, 300, 360, 420, 480, 540, 600, 660, 720, 840, 960, 1200, 1440]; // up to a full day
 
 /** How long you stay at a spot; Lowest cost and AI plan around it. */
 export function DurationPick({ mins, name, onChange }) {

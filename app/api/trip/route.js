@@ -958,7 +958,7 @@ const PLAN_SCHEMA = {
                 name: { type: 'string', description: 'Official name of the place.' },
                 area: { type: 'string', description: 'Town or city in Cebu.' },
                 cat: { type: 'string', enum: CATS },
-                mins: { type: 'integer', description: 'Minutes spent there, 15-480.' },
+                mins: { type: 'integer', description: 'Minutes spent there, 15-1440. Keep the minutes a place already has unless the plan needs them changed.' },
                 lat: { type: 'number' },
                 lon: { type: 'number' },
               },
@@ -981,7 +981,7 @@ You decide which wishlist places to include, which day each goes on, their order
 - Day N starts at the previous night's hotel and ends at that night's hotel; day 1 starts at its first stop and the last day ends at its last stop.
 - Take drive times between listed places from the matrix.
 - Plan around opening hours, morning-only activities, sunrise and sunset viewpoints, and midday heat.
-- Each place appears at most once. "start" is HH:MM, 24-hour; "mins" is 15 to 480. Return every day, numbered from 1.`;
+- Each place appears at most once. "start" is HH:MM, 24-hour; "mins" is 15 to 1440 (keep the minutes a place already has unless the plan needs them changed). Return every day, numbered from 1.`;
 
 const SUGGEST_SCHEMA = {
   type: 'object', additionalProperties: false, required: ['places'],
@@ -1206,7 +1206,7 @@ Already on the wishlist: ${stops.map(s => `${s.name} (${s.area || 'Cebu'})`).joi
     const names = new Set(stops.map(s => s.name.toLowerCase()));
     const items = (r.data.places || []).slice(0, 14)
       .filter(p => p?.name && !names.has(String(p.name).toLowerCase()))
-      .map(p => ({ name: str(p.name).trim(), area: str(p.area, 60), cat: CATS.includes(p.cat) ? p.cat : 'pin', mins: Math.min(480, Math.max(15, Math.round(+p.mins || 90))), lat: +p.lat, lon: +p.lon, tag: str(p.tag, 40) }));
+      .map(p => ({ name: str(p.name).trim(), area: str(p.area, 60), cat: CATS.includes(p.cat) ? p.cat : 'pin', mins: Math.min(1440, Math.max(15, Math.round(+p.mins || 90))), lat: +p.lat, lon: +p.lon, tag: str(p.tag, 40) }));
     return NextResponse.json({ places: await pinNew(items, stops.map(s => ({ lat: s.lat, lon: s.lon }))) });
   }
 
@@ -1296,7 +1296,7 @@ ${matrixText}`;
     if (/^\d{1,2}:\d{2}$/.test(d.start)) out[i].start = d.start.padStart(5, '0');
     out[i].title = str(d.title, 60);
     for (const s of d.stops || []) {
-      const mins = Math.min(480, Math.max(15, Math.round(+s.mins || 60)));
+      const mins = Math.min(1440, Math.max(15, Math.round(+s.mins || 60)));
       const k = idOf(s.ref);
       if (k != null) {
         if (used.has(k)) continue;

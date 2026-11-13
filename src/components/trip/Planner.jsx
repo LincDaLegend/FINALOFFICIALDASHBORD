@@ -5,7 +5,7 @@
 import { useEffect, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import './trip.css';
-import { X, Car, BedDouble, Ship, Loader2, PiggyBank, ExternalLink, Inbox, CalendarClock, Lock, LockOpen, Plus, MapPin, Clock, StickyNote, Copy } from 'lucide-react';
+import { X, Car, BedDouble, Ship, Loader2, PiggyBank, ExternalLink, Inbox, CalendarClock, Lock, LockOpen, Plus, MapPin, Clock, StickyNote, Copy, Download } from 'lucide-react';
 import { Segmented, Button, useToast } from '../business/ui.jsx';
 import { DAYS, schedule, fmtClock, fmtDur, peso, addDays, placesById, stayOf, nightlyFor, nightlyMath, roomsFor, bookingLinks, colorOf, hasSpot, asEntry, livePlace } from './tripData.js';
 import PlaceInfo from './PlaceInfo.jsx';
@@ -121,6 +121,7 @@ function Pool({ trip, setTrip, ops, dnd, entryFor, onOpen }) {
                     <span className="min-w-0 flex-1">
                       <span className="block text-subhead font-semibold leading-snug line-clamp-2">{p.name}</span>
                       {p.custom && <span className="block text-footnote text-label-2 truncate">{hasSpot(p) ? p.area || 'Own place' : 'Where you are'}</span>}
+                      {p.note?.trim() && <span className="flex items-center gap-1 text-footnote text-label-2"><StickyNote className="w-3 h-3 shrink-0 text-orange-ink" aria-hidden /><span className="truncate">{p.note.trim()}</span></span>}
                     </span>
                   </button>
                   <CopyBtn name={p.name} onClick={() => ops.duplicate(p.uid)} />
@@ -155,6 +156,7 @@ function Pool({ trip, setTrip, ops, dnd, entryFor, onOpen }) {
                   <button type="button" onClick={() => onOpen('place', p.uid)} aria-label={`Details: ${p.name}`} className="min-w-0 flex-1 flex items-center gap-2 text-left hover:opacity-80">
                     <PlacePhoto place={p} className="w-7 h-7 rounded-[7px]" iconSize={14} />
                     <span className="min-w-0 flex-1 text-subhead truncate">{p.name}</span>
+                    {p.note?.trim() && <StickyNote className="w-3.5 h-3.5 shrink-0 text-orange-ink" aria-label="Has a note" />}
                   </button>
                   <select value={day} onChange={e => ops.move(p.uid, e.target.value === '' ? null : +e.target.value)} aria-label={`Day for ${p.name}`}
                     className="h-7 w-[70px] pl-1.5 rounded-[8px] bg-surface text-footnote font-semibold text-label outline-none focus:ring-2 focus:ring-tint cursor-pointer">
@@ -230,11 +232,11 @@ function Pool({ trip, setTrip, ops, dnd, entryFor, onOpen }) {
   );
 }
 
-function CopyBtn({ name, onClick, small }) {
+function CopyBtn({ name, onClick }) {
   return (
     <button type="button" onClick={onClick} aria-label={`Duplicate ${name}`} title="Duplicate"
-      className={`${small ? 'w-6 h-6 -mt-0.5 hidden group-hover:flex group-focus-within:flex group-focus:flex' : 'w-7 h-7 flex'} items-center justify-center text-label-3 hover:text-label pressable shrink-0`}>
-      <Copy className={small ? 'w-3.5 h-3.5' : 'w-4 h-4'} aria-hidden />
+      className="w-7 h-7 flex items-center justify-center text-label-3 hover:text-label pressable shrink-0">
+      <Copy className="w-4 h-4" aria-hidden />
     </button>
   );
 }
@@ -285,7 +287,7 @@ function whereIs(trip, routes, uid) {
   };
 }
 
-const LEAVE_H = 22, STOP_MIN_H = 30, NIGHT_H = 44, TRAVEL_MIN_H = 22, GAP = 2;
+const LEAVE_H = 22, STOP_MIN_H = 38, NIGHT_H = 44, TRAVEL_MIN_H = 22, GAP = 2;
 
 /**
  * Pixel positions for a day's entries. Blocks sit at their clock time when there's room;
@@ -320,7 +322,34 @@ function layoutDay(entries, y, freeDay, start) {
   return { laid: out, bottom: cursor };
 }
 
+const TABS = [{ value: 'time', label: 'Timetable' }, { value: 'notes', label: 'Notes' }];
+const readTab = () => { try { return localStorage.getItem('tripTab') === 'notes' ? 'notes' : 'time'; } catch { return 'time'; } };
+
 function Timetable({ trip, ops, routes, dnd, onAddEntry, onOpen }) {
+  const [tab, setTabState] = useState('time');
+  useEffect(() => { setTabState(readTab()); }, []);
+  const setTab = (v) => { setTabState(v); try { localStorage.setItem('tripTab', v); } catch {} };
+  const toast = useToast();
+  const shotRef = useRef(null);
+  const [saving, setSaving] = useState(false);
+  const range = `${fmtDay(trip.startDate, { month: 'short', day: 'numeric' })} – ${fmtDay(addDays(trip.startDate, DAYS - 1), { month: 'short', day: 'numeric', year: 'numeric' })}`;
+  // The whole timetable (all days, even the ones scrolled out of view) as a PNG, without the edit buttons
+  const saveImage = async () => {
+    setSaving(true);
+    try {
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))); // let the title row render
+      const el = shotRef.current;
+      const { toPng } = await import('html-to-image');
+      const url = await toPng(el, {
+        pixelRatio: 2, width: el.scrollWidth, height: el.scrollHeight, skipFonts: true, // system fonts only; skips the map's cross-origin font CSS
+        backgroundColor: getComputedStyle(el.closest('section')).backgroundColor,
+        filter: (n) => !(n.dataset && 'noexport' in n.dataset),
+      });
+      const a = document.createElement('a');
+      a.href = url; a.download = `cebu-trip-${trip.startDate}.png`; a.click();
+      toast('Timetable saved as an image', <Download className="w-4 h-4 text-tint" aria-hidden />);
+    } catch { toast('Couldn’t make the image'); } finally { setSaving(false); }
+  };
   const backBy = toMin(trip.prefs.backBy || '21:00');
   const days = trip.days.map((_, i) => entriesOf(trip, i, routes[i]));
   const first = Math.min(...trip.days.map(d => toMin(d.start)), 7 * 60);
@@ -335,13 +364,28 @@ function Timetable({ trip, ops, routes, dnd, onAddEntry, onOpen }) {
 
   return (
     <section aria-label="Timetable" className="rounded-[18px] bg-surface min-w-0">
-      <div className="flex items-center justify-between gap-3 px-4 pt-4 pb-2">
-        <h2 className="text-title-2 flex items-center gap-2"><CalendarClock className="w-5 h-5 text-tint" aria-hidden />Timetable</h2>
-        <span className="text-footnote text-label-2 text-right">
-          {routes.some(r => r.source === 'google') ? 'Drive times: Google Maps, with traffic' : routes.some(r => r.source === 'osm') ? 'Drive times: OpenStreetMap, no traffic' : 'Drag spots and hotels onto a day'}
-        </span>
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-4 pt-4 pb-2">
+        <div className="w-[220px]"><Segmented label="Timetable or notes" size="sm" value={tab} onChange={setTab} options={TABS} /></div>
+        {tab === 'time' && (
+          <div className="flex items-center gap-3 ml-auto">
+            <span className="text-footnote text-label-2 text-right">
+              {routes.some(r => r.source === 'google') ? 'Drive times: Google Maps, with traffic' : routes.some(r => r.source === 'osm') ? 'Drive times: OpenStreetMap, no traffic' : 'Drag spots and hotels onto a day'}
+            </span>
+            <Button size="sm" variant="gray" onClick={saveImage} disabled={saving}>
+              {saving ? <Loader2 className="w-4 h-4 animate-spin" aria-hidden /> : <Download className="w-4 h-4" aria-hidden />}Save image
+            </Button>
+          </div>
+        )}
       </div>
-      <div className="trip-timetable overflow-x-auto pb-3 snap-x">
+      {tab === 'notes' ? <NotesView trip={trip} ops={ops} days={days} onOpen={onOpen} /> : (
+      <div className="trip-timetable overflow-x-auto pb-3 snap-x scroll-pl-[44px]">
+        <div ref={shotRef} style={{ minWidth: 44 + DAYS * 150 }}>
+        {saving && (
+          <div className="px-4 pb-3">
+            <p className="text-title-2">Cebu Trip</p>
+            <p className="text-subhead text-label-2 tabular">{range} · {trip.guests} {trip.guests === 1 ? 'person' : 'people'}</p>
+          </div>
+        )}
         <div className="grid" style={{ gridTemplateColumns: `44px repeat(${DAYS}, minmax(150px, 1fr))`, minWidth: 44 + DAYS * 150 }}>
           {/* Header row */}
           <div className="sticky left-0 z-20 bg-surface" />
@@ -359,8 +403,81 @@ function Timetable({ trip, ops, routes, dnd, onAddEntry, onOpen }) {
             <DayColumn key={i} trip={trip} i={i} info={days[i]} height={height} y={y} backBy={backBy} ops={ops} dnd={dnd} onOpen={onOpen} />
           ))}
         </div>
+        </div>
       </div>
+      )}
     </section>
+  );
+}
+
+// ─── Notes: every entry of every day with its own note ─────────────────────────
+
+function NoteField({ value, onChange, label, placeholder = 'Add a note' }) {
+  const lines = (value || '').split('\n').length;
+  return (
+    <textarea value={value || ''} onChange={e => onChange(e.target.value || null)} rows={Math.min(8, Math.max(1, lines))} maxLength={600}
+      aria-label={label} placeholder={placeholder}
+      className={`w-full min-w-0 px-3 py-2 rounded-[10px] text-callout leading-snug outline-none focus:ring-2 focus:ring-tint resize-none placeholder:text-label-3 transition-colors ${value ? 'bg-[rgba(255,204,0,0.14)]' : 'bg-fill'}`} />
+  );
+}
+
+function NoteRow({ time, color, icon, name, onName, children }) {
+  return (
+    <li className="grid gap-x-4 gap-y-1.5 sm:grid-cols-[minmax(0,240px)_minmax(0,1fr)] items-start py-2.5 shadow-[inset_0_-0.5px_0_var(--separator)] last:shadow-none">
+      <div className="flex items-start gap-2.5 min-w-0 pt-1.5">
+        <span className="w-[68px] shrink-0 text-footnote text-label-2 tabular">{time}</span>
+        <span className="w-1 self-stretch rounded-full shrink-0" style={{ background: color }} aria-hidden />
+        <button type="button" onClick={onName} className="min-w-0 text-left text-subhead font-semibold leading-snug hover:text-tint-ink">
+          {icon}{name}
+        </button>
+      </div>
+      {children}
+    </li>
+  );
+}
+
+function NotesView({ trip, ops, days, onOpen }) {
+  const planned = new Set(trip.days.flatMap(d => d.stops));
+  const waiting = trip.pool.filter(p => !planned.has(p.uid) && !p.hotel);
+  const bed = <BedDouble className="inline w-3.5 h-3.5 mr-1 -mt-0.5 text-[#5856D6]" aria-hidden />;
+  const count = trip.pool.filter(p => p.note?.trim()).length + trip.days.filter(d => d.hotel && d.nightNote?.trim()).length;
+  return (
+    <div className="px-4 pb-4">
+      <p className="text-footnote text-label-2 pb-1">{count ? `${count} note${count === 1 ? '' : 's'}` : 'Nothing written yet'} · saved as you type</p>
+      {trip.days.map((d, i) => {
+        const rows = days[i].entries.filter(e => e.type === 'stop' || e.type === 'night');
+        return (
+          <section key={i} aria-label={`Day ${i + 1} notes`} className="pt-4">
+            <h3 className="text-headline">Day {i + 1} <span className="text-subhead font-normal text-label-2">· {fmtDay(addDays(trip.startDate, i), { weekday: 'short', month: 'short', day: 'numeric' })}</span></h3>
+            {rows.length ? (
+              <ul className="mt-1">
+                {rows.map(e => e.type === 'night' ? (
+                  <NoteRow key={`n${i}`} time={fmtClock(e.at)} color="#5856D6" icon={bed} name={`${e.hotel.name} · night ${i + 1}`} onName={() => onOpen('hotel', e.hotel.uid)}>
+                    <NoteField value={d.nightNote} onChange={v => ops.patchDay(i, x => ({ ...x, nightNote: v }))} label={`Note for night ${i + 1}`} placeholder="Booking ref, check-in time…" />
+                  </NoteRow>
+                ) : (
+                  <NoteRow key={e.place.uid} time={fmtClock(e.from)} color={colorOf(e.place)} icon={e.place.hotel ? bed : null} name={e.place.name} onName={() => onOpen('place', e.place.uid)}>
+                    <NoteField value={e.place.note} onChange={v => ops.update(e.place.uid, { note: v })} label={`Note for ${e.place.name}`} />
+                  </NoteRow>
+                ))}
+              </ul>
+            ) : <p className="mt-1 py-2 text-subhead text-label-2">Nothing planned</p>}
+          </section>
+        );
+      })}
+      {waiting.length > 0 && (
+        <section aria-label="Pool notes" className="pt-4">
+          <h3 className="text-headline">Not on a day</h3>
+          <ul className="mt-1">
+            {waiting.map(p => (
+              <NoteRow key={p.uid} time="—" color={colorOf(p)} name={p.name} onName={() => onOpen('place', p.uid)}>
+                <NoteField value={p.note} onChange={v => ops.update(p.uid, { note: v })} label={`Note for ${p.name}`} />
+              </NoteRow>
+            ))}
+          </ul>
+        </section>
+      )}
+    </div>
   );
 }
 
@@ -371,7 +488,7 @@ function DayHead({ trip, i, info, backBy, ops, onAddEntry }) {
     <div id={`day-col-${i}`} className="px-2 pb-2 snap-start min-w-0">
       <div className="flex items-center gap-1">
         <p className="text-headline min-w-0 flex-1 truncate">Day {i + 1} <span className="text-subhead font-normal text-label-2">· {fmtDay(addDays(trip.startDate, i), { weekday: 'short', day: 'numeric' })}</span></p>
-        <button type="button" onClick={() => onAddEntry(i)} aria-label={`Add an entry to Day ${i + 1}`} title="Add entry"
+        <button type="button" data-noexport onClick={() => onAddEntry(i)} aria-label={`Add an entry to Day ${i + 1}`} title="Add entry"
           className="w-7 h-7 -mr-1 rounded-full flex items-center justify-center text-tint-ink hover:bg-tint-soft pressable shrink-0"><Plus className="w-4 h-4" strokeWidth={2.5} aria-hidden /></button>
       </div>
       <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-0.5">
@@ -446,7 +563,7 @@ function DayColumn({ trip, i, info, height, y, backBy, ops, dnd, onOpen }) {
       </div>
 
       {!d.stops.length && (
-        <p className="absolute inset-x-2 text-center text-footnote text-label-3 rounded-[10px] border-2 border-dashed border-separator py-4" style={{ top: y(toMin(d.start)) }}>
+        <p data-noexport className="absolute inset-x-2 text-center text-footnote text-label-3 rounded-[10px] border-2 border-dashed border-separator py-4" style={{ top: y(toMin(d.start)) }}>
           Drag places here
         </p>
       )}
@@ -458,6 +575,7 @@ function DayColumn({ trip, i, info, height, y, backBy, ops, dnd, onOpen }) {
         if (e.type === 'night') return (
           <HotelBlock key={k} kind="night" hotel={e.hotel} guests={trip.guests} top={e.top} night={i + 1} pinned={!!d.pin} hot={!!over?.night}
             onPin={() => ops.togglePin(i)} onClear={() => ops.setNight(i, null)}
+            note={d.nightNote} onNote={(v) => ops.patchDay(i, x => ({ ...x, nightNote: v || null }))}
             onDragStart={dnd.start({ kind: 'hotel', id: e.hotel.uid, from: i })} onDragEnd={dnd.end} />
         );
         return <StopBlock key={e.place.uid} e={e} i={i} late={e.to > backBy || e.behind > 0} ops={ops} dnd={dnd} onOpen={onOpen} />;
@@ -476,58 +594,66 @@ function StopBlock({ e, i, late, ops, dnd, onOpen }) {
   const p = e.place;
   const [editing, setEditing] = useState(false);
   const h = e.h;
-  const roomy = h >= 84; // tall enough to show its controls; shorter blocks show them on hover / tap
+  // Blocks never grow past their slot (that covered the next entry). What fits is shown; the rest is in the details.
+  const roomy = h >= 84; // room for the duration / must controls
   const note = (p.note || '').trim();
-  // How much of the note fits under the name and times (the rest shows on hover, or in the details)
-  const noteLines = h >= 150 ? 'line-clamp-4' : h >= 110 ? 'line-clamp-2' : 'line-clamp-1';
+  const nameLines = roomy && p.name.length > 15 ? 2 : 1;
+  const used = 6 + nameLines * 15 + 16 + (roomy ? 32 : 0);
+  const noteLines = Math.floor((h - used - 4) / 15); // note lines that fit under everything else
+  const icon = 'w-5 h-5 flex items-center justify-center pressable shrink-0';
   return (
-    <div draggable={!editing} onDragStart={dnd.start({ kind: 'place', id: p.uid, from: i })} onDragEnd={dnd.end} tabIndex={0}
-      className={`group absolute inset-x-1 rounded-[10px] bg-surface shadow-[0_1px_3px_rgba(0,0,0,0.12)] overflow-hidden cursor-grab active:cursor-grabbing
-        hover:z-20 focus-within:z-20 ${note ? 'hover:min-h-[136px] focus-within:min-h-[136px] focus:min-h-[136px]' : 'hover:min-h-[108px] focus-within:min-h-[108px] focus:min-h-[108px]'} focus:z-20 outline-none focus:ring-2 focus:ring-tint
-        ${editing ? 'z-30 min-h-[150px] shadow-[0_8px_24px_rgba(0,0,0,0.18)]' : ''} ${late ? 'ring-1 ring-red' : ''} ${dnd.drag?.id === p.uid ? 'opacity-40' : ''}`}
-      style={{ top: e.top, height: h }}>
-      <span className="absolute inset-y-0 left-0 w-1" style={{ background: colorOf(p) }} aria-hidden />
-      <div className="pl-2.5 pr-1 py-1">
-        <div className="flex items-start gap-0.5">
-          <span className="min-w-0 flex-1">
-            <button type="button" onClick={() => onOpen('place', p.uid)} title="Details"
-              className={`block w-full text-left text-footnote font-semibold leading-tight hover:text-tint-ink ${roomy ? 'line-clamp-2' : 'truncate'}`}>
+    <>
+      <div draggable={!editing} onDragStart={dnd.start({ kind: 'place', id: p.uid, from: i })} onDragEnd={dnd.end}
+        className={`group absolute inset-x-1 rounded-[10px] bg-surface shadow-[0_1px_3px_rgba(0,0,0,0.12)] hover:shadow-[0_2px_8px_rgba(0,0,0,0.16)] transition-shadow overflow-hidden cursor-grab active:cursor-grabbing
+          ${late ? 'ring-1 ring-red' : ''} ${editing ? 'ring-2 ring-tint' : ''} ${dnd.drag?.id === p.uid ? 'opacity-40' : ''}`}
+        style={{ top: e.top, height: h }}>
+        <span className="absolute inset-y-0 left-0 w-1" style={{ background: colorOf(p) }} aria-hidden />
+        <div className="pl-2.5 pr-0.5 py-[3px]">
+          <div className="flex items-start gap-0.5">
+            <button type="button" onClick={() => onOpen('place', p.uid)} title={p.name}
+              className={`min-w-0 flex-1 text-left text-footnote font-semibold leading-[15px] hover:text-tint-ink ${nameLines === 2 ? 'line-clamp-2' : 'truncate'}`}>
               {p.hotel && <BedDouble className="inline w-3 h-3 mr-1 -mt-0.5 text-[#5856D6]" aria-label="Hotel" />}{p.name}
             </button>
-            <span className={`flex items-center gap-0.5 text-[11px] tabular whitespace-nowrap ${late ? 'text-red-ink font-semibold' : 'text-label-2'}`}
+            <button type="button" data-noexport onClick={() => ops.move(p.uid, null)} aria-label={p.hotel ? `Remove stop: ${p.name}` : `Back to pool: ${p.name}`} title={p.hotel ? 'Remove' : 'Back to pool'}
+              className={`${icon} -mt-0.5 text-label-3 hover:text-red-ink`}><X className="w-3.5 h-3.5" aria-hidden /></button>
+          </div>
+          <div className="flex items-center gap-0.5 h-4">
+            <span className={`min-w-0 flex-1 flex items-center gap-0.5 text-[11px] tabular whitespace-nowrap ${late ? 'text-red-ink font-semibold' : 'text-label-2'}`}
               title={p.at ? (e.behind ? `Set for ${fmtClock(toMin(p.at))}: ${fmtDur(e.behind)} late` : `Set for ${fmtClock(toMin(p.at))}`) : undefined}>
-              {p.at && <Clock className="w-3 h-3 shrink-0" aria-label="Fixed time" />}{fmtRange(e.from, e.to)}
-              {note && !roomy && <StickyNote className="w-3 h-3 shrink-0 ml-0.5 text-orange-ink group-hover:hidden group-focus-within:hidden" aria-label="Has a note" />}
+              {p.at && <Clock className="w-3 h-3 shrink-0" aria-label="Fixed time" />}<span className="truncate">{fmtRange(e.from, e.to)}</span>
             </span>
-          </span>
-          <button type="button" onClick={() => setEditing(true)} aria-label={note ? `Edit note for ${p.name}` : `Add a note to ${p.name}`} title={note ? 'Edit note' : 'Add note'}
-            className={`w-6 h-6 -mt-0.5 items-center justify-center pressable shrink-0 ${editing ? 'hidden' : roomy ? 'flex' : 'hidden group-hover:flex group-focus-within:flex group-focus:flex'} ${note ? 'text-orange-ink' : 'text-label-3 hover:text-label'}`}>
-            <StickyNote className="w-3.5 h-3.5" aria-hidden />
-          </button>
-          {!editing && <CopyBtn name={p.name} onClick={() => ops.duplicate(p.uid)} small />}
-          <button type="button" onClick={() => ops.move(p.uid, null)} aria-label={p.hotel ? `Remove stop: ${p.name}` : `Back to pool: ${p.name}`} title={p.hotel ? 'Remove' : 'Back to pool'}
-            className="w-6 h-6 -mt-0.5 flex items-center justify-center text-label-3 hover:text-red-ink pressable shrink-0"><X className="w-3.5 h-3.5" aria-hidden /></button>
-        </div>
-        {editing ? (
-          <textarea autoFocus value={p.note || ''} onChange={ev => ops.update(p.uid, { note: ev.target.value || null })}
-            onBlur={() => setEditing(false)} onKeyDown={ev => { if (ev.key === 'Escape' || (ev.key === 'Enter' && !ev.shiftKey)) { ev.preventDefault(); ev.currentTarget.blur(); } }}
-            rows={3} maxLength={600} placeholder="Note…" aria-label={`Note for ${p.name}`}
-            className="mt-1 w-full px-2 py-1 rounded-[8px] bg-[rgba(255,204,0,0.16)] text-[12px] leading-snug text-label outline-none focus:ring-2 focus:ring-tint resize-none placeholder:text-label-3" />
-        ) : note ? (
-          <p className={`mt-1 flex gap-1 text-[11px] leading-snug text-label ${roomy ? '' : 'hidden group-hover:flex group-focus-within:flex group-focus:flex'}`}
-            onDoubleClick={() => setEditing(true)} title={note}>
-            <StickyNote className="w-3 h-3 mt-[1px] shrink-0 text-orange-ink" aria-hidden />
-            <span className={`min-w-0 whitespace-pre-line break-words ${noteLines}`}>{note}</span>
-          </p>
-        ) : null}
-        <div className={`items-center gap-0.5 mt-1 ${editing ? 'hidden' : roomy ? 'flex' : 'hidden group-hover:flex group-focus-within:flex group-focus:flex'}`}>
-          <DurationPick mins={p.mins} name={p.name} onChange={mins => ops.update(p.uid, { mins })} />
-          {p.custom
-            ? <AtPick at={p.at} name={p.name} onChange={at => ops.update(p.uid, { at })} />
-            : <MustStar size="sm" on={p.must} name={p.name} onToggle={() => ops.update(p.uid, { must: !p.must })} />}
+            <button type="button" {...(note ? {} : { 'data-noexport': '' })} onClick={() => setEditing(v => !v)} aria-label={note ? `Edit note for ${p.name}` : `Add a note to ${p.name}`} aria-expanded={editing}
+              title={note || 'Add note'} className={`${icon} ${note ? 'text-orange-ink' : 'text-label-3 hover:text-label'}`}>
+              <StickyNote className="w-3.5 h-3.5" fill={note ? 'currentColor' : 'none'} fillOpacity={0.2} aria-hidden />
+            </button>
+            <button type="button" data-noexport onClick={() => ops.duplicate(p.uid)} aria-label={`Duplicate ${p.name}`} title="Duplicate"
+              className={`${icon} !hidden group-hover:!flex group-focus-within:!flex text-label-3 hover:text-label`}><Copy className="w-3.5 h-3.5" aria-hidden /></button>
+          </div>
+          {roomy && (
+            <div data-noexport className="flex items-center gap-0.5 mt-1">
+              <DurationPick mins={p.mins} name={p.name} onChange={mins => ops.update(p.uid, { mins })} />
+              {p.custom
+                ? <AtPick at={p.at} name={p.name} onChange={at => ops.update(p.uid, { at })} />
+                : <MustStar size="sm" on={p.must} name={p.name} onToggle={() => ops.update(p.uid, { must: !p.must })} />}
+            </div>
+          )}
+          {note && noteLines >= 1 && (
+            <p className="mt-1 text-[11px] leading-[15px] text-label whitespace-pre-line break-words overflow-hidden" title={note}
+              style={{ display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: noteLines }} onDoubleClick={() => setEditing(true)}>{note}</p>
+          )}
         </div>
       </div>
-    </div>
+      {/* The note opens in a floating box under the entry, so nothing else moves */}
+      {editing && (
+        <div className="absolute inset-x-1 z-40 rounded-[10px] bg-surface p-1.5 shadow-[0_8px_24px_rgba(0,0,0,0.18)]" style={{ top: e.top + h + 4 }}>
+          <textarea autoFocus onFocus={ev => { const n = ev.target.value.length; ev.target.setSelectionRange(n, n); }} value={p.note || ''} onChange={ev => ops.update(p.uid, { note: ev.target.value || null })}
+            onBlur={() => setEditing(false)} onKeyDown={ev => { if (ev.key === 'Escape' || (ev.key === 'Enter' && !ev.shiftKey)) { ev.preventDefault(); ev.currentTarget.blur(); } }}
+            rows={4} maxLength={600} placeholder="Note…" aria-label={`Note for ${p.name}`}
+            className="block w-full px-2 py-1 rounded-[8px] bg-[rgba(255,204,0,0.16)] text-[12px] leading-snug text-label outline-none resize-none placeholder:text-label-3" />
+          <p className="px-1 pt-1 text-[10px] text-label-2">Enter to save · Shift+Enter for a new line</p>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -540,16 +666,17 @@ function TravelBlock({ e, fuel }) {
       title={`Drive ${label} · ${peso(drive * fuel.pricePerL / Math.max(1, fuel.kmPerL))} gas · ${e.leg.source === 'google' ? 'Google Maps, with traffic' : e.leg.estimated ? 'rough estimate' : 'OpenStreetMap, no traffic'}`}>
       <span className="absolute left-1.5 inset-y-0.5 border-l-2 border-dotted border-label-3" aria-hidden />
       {h >= 16 && (
-        <span className="relative ml-3.5 inline-flex items-center gap-1 px-1.5 h-5 max-w-[calc(100%-14px)] overflow-hidden whitespace-nowrap rounded-full bg-fill text-[11px] font-medium text-label-2 tabular">
+        <span className="relative ml-3.5 inline-flex items-center gap-1 px-1.5 h-5 min-w-0 max-w-[calc(100%-14px)] overflow-hidden whitespace-nowrap rounded-full bg-fill text-[11px] font-medium text-label-2 tabular">
           {e.leg.ferryKm > 0.5 ? <Ship className="w-3 h-3" aria-hidden /> : <Car className="w-3 h-3" aria-hidden />}
-          {e.leg.estimated ? '≈ ' : ''}{label}
+          <span className="truncate">{e.leg.estimated ? '≈ ' : ''}{label}</span>
         </span>
       )}
     </div>
   );
 }
 
-function HotelBlock({ kind, hotel, guests, top, night, pinned, hot, onPin, onClear, onDragStart, onDragEnd }) {
+function HotelBlock({ kind, hotel, guests, top, night, pinned, hot, note, onNote, onPin, onClear, onDragStart, onDragEnd }) {
+  const [editing, setEditing] = useState(false);
   if (kind !== 'night') {
     return (
       <div className="absolute inset-x-1 h-[22px] rounded-[8px] flex items-center gap-1 px-2 bg-[rgba(88,86,214,0.14)] text-[#5856D6]" style={{ top }}>
@@ -564,23 +691,33 @@ function HotelBlock({ kind, hotel, guests, top, night, pinned, hot, onPin, onCle
       <div className="flex items-center gap-1 min-w-0">
         <BedDouble className="w-3.5 h-3.5 shrink-0" aria-hidden />
         <span className="min-w-0 flex-1 truncate text-footnote font-semibold leading-tight">{hotel.name}</span>
-        <button type="button" onClick={onClear} aria-label={`No hotel night ${night}`} className="w-6 h-5 flex items-center justify-center text-white/80 hover:text-white pressable shrink-0"><X className="w-3.5 h-3.5" aria-hidden /></button>
+        <button type="button" data-noexport onClick={onClear} aria-label={`No hotel night ${night}`} className="w-6 h-5 flex items-center justify-center text-white/80 hover:text-white pressable shrink-0"><X className="w-3.5 h-3.5" aria-hidden /></button>
       </div>
       <div className="flex items-center gap-1 min-w-0">
-        <span className="min-w-0 flex-1 truncate text-[11px] text-white/85 tabular leading-tight">Night {night} · {peso(nightlyFor(hotel, guests))}</span>
-        <button type="button" onClick={onPin} aria-pressed={pinned} aria-label={pinned ? `Unpin night ${night}` : `Pin night ${night}`}
+        <span className="min-w-0 flex-1 truncate text-[11px] text-white/85 tabular leading-tight" title={note || undefined}>Night {night} · {peso(nightlyFor(hotel, guests))}</span>
+        <button type="button" {...(note ? {} : { 'data-noexport': '' })} onClick={() => setEditing(true)} aria-label={note ? `Edit note for night ${night}` : `Add a note to night ${night}`} title={note || 'Add note'}
+          className={`w-6 h-5 flex items-center justify-center pressable shrink-0 ${note ? 'text-white' : 'text-white/60 hover:text-white'}`}>
+          <StickyNote className="w-3.5 h-3.5" fill={note ? 'currentColor' : 'none'} fillOpacity={0.35} aria-hidden />
+        </button>
+        <button type="button" data-noexport onClick={onPin} aria-pressed={pinned} aria-label={pinned ? `Unpin night ${night}` : `Pin night ${night}`}
           title={pinned ? 'Pinned: optimizers keep this hotel' : 'Not pinned: optimizers may change it'}
           className={`w-6 h-5 flex items-center justify-center pressable shrink-0 ${pinned ? 'text-white' : 'text-white/60 hover:text-white'}`}>
           {pinned ? <Lock className="w-3.5 h-3.5" strokeWidth={2.4} aria-hidden /> : <LockOpen className="w-3.5 h-3.5" aria-hidden />}
         </button>
       </div>
+      {editing && (
+        <textarea autoFocus onFocus={ev => { const n = ev.target.value.length; ev.target.setSelectionRange(n, n); }} value={note || ''} onChange={ev => onNote(ev.target.value)} draggable={false} onDragStart={ev => ev.preventDefault()}
+          onBlur={() => setEditing(false)} onKeyDown={ev => { if (ev.key === 'Escape' || (ev.key === 'Enter' && !ev.shiftKey)) { ev.preventDefault(); ev.currentTarget.blur(); } }}
+          rows={3} maxLength={600} placeholder="Booking ref, check-in time…" aria-label={`Note for night ${night}`}
+          className="absolute left-0 right-0 top-[48px] z-30 px-2 py-1.5 rounded-[8px] bg-surface shadow-[0_8px_24px_rgba(0,0,0,0.18)] text-[12px] leading-snug text-label outline-none ring-2 ring-[#5856D6] resize-none placeholder:text-label-3" />
+      )}
     </div>
   );
 }
 
 function NightSlot({ top, i, hotels, ops, hot, carrying }) {
   return (
-    <div data-night className={`absolute inset-x-1 rounded-[10px] border-2 border-dashed px-2 py-1.5 text-center transition-colors ${hot ? 'border-[#5856D6] text-[#5856D6] bg-[rgba(88,86,214,0.10)]' : carrying ? 'border-[#5856D6]/50 text-[#5856D6]' : 'border-separator text-label-3'}`} style={{ top }}>
+    <div data-night data-noexport className={`absolute inset-x-1 rounded-[10px] border-2 border-dashed px-2 py-1.5 text-center transition-colors ${hot ? 'border-[#5856D6] text-[#5856D6] bg-[rgba(88,86,214,0.10)]' : carrying ? 'border-[#5856D6]/50 text-[#5856D6]' : 'border-separator text-label-3'}`} style={{ top }}>
       <p className="text-[11px] font-semibold flex items-center justify-center gap-1"><BedDouble className="w-3.5 h-3.5" aria-hidden />{carrying ? `Night ${i + 1} · sleep here` : `Night ${i + 1} · drop a hotel`}</p>
       {hotels.length > 0 && (
         <select value="" onChange={e => e.target.value && ops.setNight(i, e.target.value)} aria-label={`Hotel for night ${i + 1}`}
