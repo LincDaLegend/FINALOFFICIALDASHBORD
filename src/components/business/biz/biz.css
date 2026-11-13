@@ -1,57 +1,75 @@
-/* Business dashboard: glass cards over a soft colour wash, chart colours (validated light + dark). */
+/* Business dashboard. Quiet chrome on the app's own neutrals; the colour lives in the chart and the slab. */
 
 .biz-root {
-  --series-1: #2a78d6; /* revenue */
-  --series-2: #eb6834; /* profit */
-  --glass-bg: rgba(255, 255, 255, 0.62);
-  --glass-edge: rgba(255, 255, 255, 0.75);
-  --glass-shadow: 0 8px 32px rgba(15, 40, 90, 0.10), 0 1px 2px rgba(15, 40, 90, 0.06);
-  --wash-1: rgba(10, 132, 255, 0.28);
-  --wash-2: rgba(94, 92, 230, 0.22);
-  --wash-3: rgba(48, 176, 199, 0.20);
-  position: relative;
-  isolation: isolate;
+  --series-rev: #8e8e93;   /* revenue: a neutral step */
+  --series-profit: #0a7aff; /* profit: the accent, the line that matters */
+  --hairline: rgba(60, 60, 67, 0.12);
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
 }
 @media (prefers-color-scheme: dark) {
   .biz-root {
-    --series-1: #3987e5;
-    --series-2: #d95926;
-    --glass-bg: rgba(44, 44, 46, 0.55);
-    --glass-edge: rgba(255, 255, 255, 0.10);
-    --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
-    --wash-1: rgba(10, 132, 255, 0.30);
-    --wash-2: rgba(94, 92, 230, 0.26);
-    --wash-3: rgba(48, 176, 199, 0.16);
+    --series-rev: #6e6e73;
+    --series-profit: #3d95ff;
+    --hairline: rgba(235, 235, 245, 0.10);
   }
 }
 
-/* The colour wash behind the top of the page: what the glass blurs */
-.biz-wash {
-  position: absolute; inset: 0 0 auto 0; height: 520px; z-index: -1; pointer-events: none; overflow: hidden;
-  background:
-    radial-gradient(40% 60% at 12% 18%, var(--wash-1), transparent 70%),
-    radial-gradient(35% 55% at 62% 8%, var(--wash-2), transparent 70%),
-    radial-gradient(30% 50% at 92% 40%, var(--wash-3), transparent 70%);
-  mask-image: linear-gradient(to bottom, #000 55%, transparent);
+/* Plain raised surface with a hairline: depth without glass */
+.biz-card {
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05), inset 0 0 0 1px var(--hairline);
+}
+@media (prefers-color-scheme: dark) {
+  .biz-card { box-shadow: inset 0 0 0 1px var(--hairline); }
 }
 
-.glass-card {
-  background: var(--glass-bg);
-  -webkit-backdrop-filter: blur(20px) saturate(170%);
-  backdrop-filter: blur(20px) saturate(170%);
-  box-shadow: var(--glass-shadow), inset 0 0 0 1px var(--glass-edge);
+/* Signature: SKUs and batches as cert tags, like the label on a graded slab */
+.biz-cert {
+  display: inline-flex; align-items: center; height: 20px; padding: 0 6px; border-radius: 4px;
+  font: 500 11px/1 ui-monospace, 'SF Mono', Menlo, monospace; letter-spacing: 0.02em;
+  color: var(--label-2); background: var(--fill); white-space: nowrap;
 }
 
-@media (prefers-reduced-transparency: reduce) {
-  .glass-card { background: var(--surface); -webkit-backdrop-filter: none; backdrop-filter: none; }
-  .biz-wash { display: none; }
+/* Status tags: small, square-ish, neutral unless the state means something (unpaid, on hold, paid) */
+.biz-tag {
+  display: inline-flex; align-items: center; height: 24px; padding: 0 8px; border-radius: 6px;
+  font-size: 12px; font-weight: 500; white-space: nowrap; color: var(--label); background: var(--fill);
+  transition: background-color 150ms var(--ease), color 150ms var(--ease);
 }
-@media (prefers-contrast: more) {
-  .glass-card { background: var(--surface); box-shadow: inset 0 0 0 1px var(--label-2, #666); }
+.biz-tag:hover { filter: brightness(0.95); }
+.biz-tag:active { transform: scale(0.97); }
+.biz-tag--good { color: var(--green-ink); background: var(--green-soft); }
+.biz-tag--warn { color: var(--orange-ink); background: var(--orange-soft); }
+.biz-tag--bad  { color: var(--red-ink); background: var(--red-soft); }
+.biz-tag--done { color: var(--label-2); }
+
+/* The slab: clear acrylic around a card window, with a printed label strip */
+.biz-slab {
+  position: relative; border-radius: 14px; padding: 8px;
+  background: linear-gradient(180deg, #f6f6f8, #e9e9ed);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08), inset 0 0 0 1px rgba(0, 0, 0, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+.biz-slab__label {
+  border-radius: 6px; padding: 8px 10px; background: #fff;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.06), inset 0 -2px 0 #c8102e; /* the grader's red rule */
+}
+.biz-slab__window {
+  margin-top: 8px; border-radius: 6px; height: 112px; position: relative; overflow: hidden;
+  background: linear-gradient(160deg, #2c2c2e, #1c1c1e);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.25);
+}
+@media (prefers-color-scheme: dark) {
+  .biz-slab { background: linear-gradient(180deg, #3a3a3c, #2c2c2e); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.10); }
+  .biz-slab__label { background: #f2f2f4; }
 }
 
-.biz-sheet[open] { animation: biz-sheet-in 0.32s cubic-bezier(0.32, 0.72, 0, 1); }
+.biz-sheet[open] { animation: biz-sheet-in 0.32s var(--ease, cubic-bezier(0.22, 1, 0.36, 1)); }
 .biz-sheet[open]::backdrop { animation: biz-fade 0.2s ease-out; }
-@keyframes biz-sheet-in { from { transform: translateY(28px); opacity: 0; } }
+@keyframes biz-sheet-in { from { transform: translateY(12px); opacity: 0; } }
 @keyframes biz-fade { from { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .biz-sheet[open] { animation: biz-fade 0.2s ease-out; } }
+
+.biz-pop { transform-origin: top right; animation: biz-pop-in 0.2s var(--ease); }
+@media (max-width: 639px) { .biz-pop { transform-origin: top left; } }
+@keyframes biz-pop-in { from { opacity: 0; transform: translateY(-4px) scale(0.98); } }
+@media (prefers-reduced-motion: reduce) { .biz-pop { animation: biz-fade 0.15s ease-out; } }

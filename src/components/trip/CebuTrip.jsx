@@ -7,10 +7,10 @@
 
 import { useMemo, useState } from 'react';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
-import { ChevronDown, CalendarDays, Heart, Users } from 'lucide-react';
+import { ChevronDown, CalendarDays, Heart, Users, Copy } from 'lucide-react';
 import { Row, Button, useToast, ConfirmDialog, SPRING } from '../business/ui.jsx';
 import { NumberRow } from '../business/FindCards.jsx';
-import { DAYS, emptyTrip, asPlace, addDays, fmtDur, peso, uid as newUid } from './tripData.js';
+import { DAYS, emptyTrip, asPlace, asHotelStop, copyOf, addDays, fmtDur, peso, uid as newUid } from './tripData.js';
 import { useTrip, useRoutes, dayCost } from './tripHooks.js';
 import { PeopleStepper, fmtDay, isStay } from './tripUi.jsx';
 import Planner from './Planner.jsx';
@@ -40,6 +40,14 @@ export default function CebuTrip() {
         return;
       }
       const existing = trip.pool.find(x => x.id === p.id);
+      // Already on another day: add a copy, so the same place can be on more than one day
+      const onDay = existing ? trip.days.findIndex(d => d.stops.includes(existing.uid)) : -1;
+      if (existing && day != null && onDay >= 0 && onDay !== day) {
+        const copy = copyOf(existing);
+        setTrip(t => ({ ...t, pool: [...t.pool, copy], days: t.days.map((d, i) => (i === day ? { ...d, stops: [...d.stops, copy.uid] } : d)) }));
+        if (!quiet) toast(`Also on Day ${day + 1}`, <Heart className="w-4 h-4 text-red" fill="currentColor" aria-hidden />);
+        return;
+      }
       if (existing) {
         if (day != null) { ops.move(existing.uid, day); if (!quiet) toast(`Added to Day ${day + 1}`, <Heart className="w-4 h-4 text-red" fill="currentColor" aria-hidden />); }
         else if (!quiet) toast('Already in the pool');
@@ -59,8 +67,31 @@ export default function CebuTrip() {
     update(uid, patch) {
       setTrip(t => ({ ...t, pool: t.pool.map(p => (p.uid === uid ? { ...p, ...patch } : p)) }));
     },
+    /** Copy an entry (with its time and note) right after the original, or next to it in the pool. */
+    duplicate(uid) {
+      const p = trip.pool.find(x => x.uid === uid);
+      if (!p) return;
+      const copy = copyOf(p);
+      setTrip(t => ({
+        ...t,
+        pool: t.pool.flatMap(x => (x.uid === uid ? [x, copy] : [x])),
+        days: t.days.map(d => (d.stops.includes(uid) ? { ...d, stops: d.stops.flatMap(u => (u === uid ? [u, copy.uid] : [u])) } : d)),
+      }));
+      const day = trip.days.findIndex(d => d.stops.includes(uid));
+      toast(day >= 0 ? `Copied · Day ${day + 1}` : 'Copied to the pool', <Copy className="w-4 h-4 text-tint" aria-hidden />, { label: 'Undo', onClick: () => ops.remove(copy.uid) });
+    },
+    /** A hotel as an entry in the day (check in, drop bags, rest), before another entry or at the end. */
+    addHotelStop(hotelUid, day, before = null) {
+      const h = (trip.hotels || []).find(x => x.uid === hotelUid);
+      if (!h) return;
+      const stop = asHotelStop(h);
+      setTrip(t => ({ ...t, pool: [...t.pool, stop] }));
+      ops.move(stop.uid, day, before);
+    },
     /** Put a wishlist place on a day (before another place, or at the end), or back to "not planned" with day = null. */
     move(uid, day, before = null) {
+      // A hotel stop off its day has nowhere to wait (the hotel itself stays in the pool): drop it
+      if (day == null && trip.pool.find(p => p.uid === uid)?.hotel) { ops.remove(uid); return; }
       setTrip(t => ({
         ...t,
         days: t.days.map((d, i) => {
@@ -89,7 +120,13 @@ export default function CebuTrip() {
     },
     updateHotel(id, patch) { setTrip(t => ({ ...t, hotels: t.hotels.map(h => (h.uid === id ? { ...h, ...patch } : h)) })); },
     removeHotel(id) {
-      setTrip(t => ({ ...t, hotels: t.hotels.filter(h => h.uid !== id), days: t.days.map(d => (d.hotel === id ? { ...d, hotel: null, pin: false } : d)) }));
+      setTrip(t => {
+        const gone = new Set(t.pool.filter(p => p.hotel === id).map(p => p.uid)); // its stops go with it
+        return {
+          ...t, hotels: t.hotels.filter(h => h.uid !== id), pool: t.pool.filter(p => !gone.has(p.uid)),
+          days: t.days.map(d => ({ ...d, stops: d.stops.filter(u => !gone.has(u)), ...(d.hotel === id ? { hotel: null, pin: false } : {}) })),
+        };
+      });
     },
     /** Picking a hotel by hand pins that night, so Cheapest / Lowest cost / AI keep it. */
     setNight(i, id) { setTrip(t => ({ ...t, days: t.days.map((d, k) => (k === i ? { ...d, hotel: id, pin: !!id } : d)) })); },

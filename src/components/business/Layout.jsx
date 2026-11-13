@@ -15,9 +15,9 @@ export const TABS = [
 
 function AppMark() {
   return (
-    <span className="w-8 h-8 rounded-[9px] flex items-center justify-center text-white shadow-sm"
-      style={{ background: 'linear-gradient(160deg, #0A84FF, #5E5CE6)' }} aria-hidden>
-      <FlaskConical className="w-[18px] h-[18px]" strokeWidth={2.2} />
+    // A flat mark in one solid colour: the flask glyph on the primary text colour
+    <span className="w-7 h-7 rounded-[8px] flex items-center justify-center" style={{ background: 'var(--label)', color: 'var(--bg)' }} aria-hidden>
+      <FlaskConical className="w-4 h-4" strokeWidth={2} />
     </span>
   );
 }
@@ -29,7 +29,7 @@ export default function Layout({ activeTab, setActiveTab, watchCount, children }
       <aside className="hidden lg:flex fixed inset-y-0 left-0 w-[260px] flex-col material-sidebar shadow-[inset_-0.5px_0_0_var(--separator)]">
         <div className="flex items-center gap-2.5 px-5 pt-7 pb-6">
           <AppMark />
-          <span className="text-title-2">API Tests</span>
+          <span className="text-[17px] font-semibold leading-none">API Tests</span>
         </div>
         <nav aria-label="Main" className="px-3 space-y-0.5">
           {TABS.map(({ id, label, icon: Icon }) => {

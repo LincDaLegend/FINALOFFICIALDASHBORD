@@ -5,9 +5,9 @@
 import { useEffect, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import './trip.css';
-import { X, Car, BedDouble, Ship, Loader2, PiggyBank, ExternalLink, Inbox, CalendarClock, Lock, LockOpen, Plus, MapPin, Clock, StickyNote } from 'lucide-react';
+import { X, Car, BedDouble, Ship, Loader2, PiggyBank, ExternalLink, Inbox, CalendarClock, Lock, LockOpen, Plus, MapPin, Clock, StickyNote, Copy } from 'lucide-react';
 import { Segmented, Button, useToast } from '../business/ui.jsx';
-import { DAYS, schedule, fmtClock, fmtDur, peso, addDays, placesById, stayOf, nightlyFor, nightlyMath, roomsFor, bookingLinks, colorOf, hasSpot, asEntry } from './tripData.js';
+import { DAYS, schedule, fmtClock, fmtDur, peso, addDays, placesById, stayOf, nightlyFor, nightlyMath, roomsFor, bookingLinks, colorOf, hasSpot, asEntry, livePlace } from './tripData.js';
 import PlaceInfo from './PlaceInfo.jsx';
 import { PlacePhoto, MustStar, HotelForm, PriceCell, UnitPick, DurationPick, postTrip, tripPayload, fmtDay, fmtKm, useGeocode, GeoPick } from './tripUi.jsx';
 
@@ -35,7 +35,7 @@ export default function Planner({ trip, setTrip, ops, routes }) {
   const [entryFor, setEntryFor] = useState(null); // { day, n }: a day's "+" opens the entry form for that day
   const [info, setInfo] = useState(null); // { kind: 'place' | 'hotel', uid }: the details sheet
   const onOpen = (kind, uid) => setInfo({ kind, uid });
-  const infoItem = info && (info.kind === 'hotel' ? (trip.hotels || []).find(h => h.uid === info.uid) : trip.pool.find(p => p.uid === info.uid));
+  const infoItem = info && (info.kind === 'hotel' ? (trip.hotels || []).find(h => h.uid === info.uid) : livePlace(trip.pool.find(p => p.uid === info.uid), trip.hotels));
 
   return (
     <div className="space-y-5">
@@ -59,7 +59,7 @@ function Pool({ trip, setTrip, ops, dnd, entryFor, onOpen }) {
   const [busy, setBusy] = useState(false);
   const [near, setNear] = useState('');
   const planned = new Set(trip.days.flatMap(d => d.stops));
-  const waiting = trip.pool.filter(p => !planned.has(p.uid));
+  const waiting = trip.pool.filter(p => !planned.has(p.uid) && !p.hotel);
   const byUid = placesById(trip);
   const scheduled = trip.days.flatMap((d, day) => d.stops.map(u => byUid[u] && { p: byUid[u], day }).filter(Boolean));
   const hotels = trip.hotels || [];
@@ -67,6 +67,7 @@ function Pool({ trip, setTrip, ops, dnd, entryFor, onOpen }) {
   const nearUid = located.some(p => p.uid === near) ? near : located[located.length - 1]?.uid || '';
   const nearPlace = trip.pool.find(p => p.uid === nearUid);
   const nightsOf = (id) => trip.days.slice(0, DAYS - 1).flatMap((d, k) => (d.hotel === id ? [k + 1] : []));
+  const stopDaysOf = (id) => trip.days.flatMap((d, k) => (d.stops.some(u => byUid[u]?.hotel === id) ? [k + 1] : []));
   const isOver = dnd.over === 'pool';
 
   // Dropping on the pool takes a place off its day, or a hotel off its night
@@ -122,6 +123,7 @@ function Pool({ trip, setTrip, ops, dnd, entryFor, onOpen }) {
                       {p.custom && <span className="block text-footnote text-label-2 truncate">{hasSpot(p) ? p.area || 'Own place' : 'Where you are'}</span>}
                     </span>
                   </button>
+                  <CopyBtn name={p.name} onClick={() => ops.duplicate(p.uid)} />
                   <button type="button" onClick={() => ops.remove(p.uid)} aria-label={`Remove ${p.name}`}
                     className="w-7 h-7 flex items-center justify-center text-label-3 hover:text-red-ink pressable shrink-0"><X className="w-4 h-4" aria-hidden /></button>
                 </div>
@@ -157,8 +159,9 @@ function Pool({ trip, setTrip, ops, dnd, entryFor, onOpen }) {
                   <select value={day} onChange={e => ops.move(p.uid, e.target.value === '' ? null : +e.target.value)} aria-label={`Day for ${p.name}`}
                     className="h-7 w-[70px] pl-1.5 rounded-[8px] bg-surface text-footnote font-semibold text-label outline-none focus:ring-2 focus:ring-tint cursor-pointer">
                     {trip.days.map((_, i) => <option key={i} value={i}>Day {i + 1}</option>)}
-                    <option value="">Unplan</option>
+                    <option value="">{p.hotel ? 'Remove' : 'Unplan'}</option>
                   </select>
+                  <CopyBtn name={p.name} onClick={() => ops.duplicate(p.uid)} />
                   <button type="button" onClick={() => ops.remove(p.uid)} aria-label={`Remove ${p.name}`}
                     className="w-7 h-7 flex items-center justify-center text-label-3 hover:text-red-ink pressable shrink-0"><X className="w-4 h-4" aria-hidden /></button>
                 </li>
@@ -172,7 +175,7 @@ function Pool({ trip, setTrip, ops, dnd, entryFor, onOpen }) {
         {hotels.length > 0 && (
           <ul className="px-2 space-y-1.5">
             {hotels.map(h => {
-              const n = nightsOf(h.uid);
+              const n = nightsOf(h.uid), visits = stopDaysOf(h.uid);
               return (
                 <li key={h.uid} draggable onDragStart={dnd.start({ kind: 'hotel', id: h.uid, from: 'pool' })} onDragEnd={dnd.end}
                   className="rounded-[12px] bg-fill p-2 cursor-grab active:cursor-grabbing">
@@ -181,7 +184,7 @@ function Pool({ trip, setTrip, ops, dnd, entryFor, onOpen }) {
                       <span className="w-10 h-10 rounded-[9px] bg-[#5856D6] text-white flex items-center justify-center shrink-0"><BedDouble className="w-5 h-5" aria-hidden /></span>
                       <span className="min-w-0 flex-1">
                         <span className="block text-subhead font-semibold leading-snug truncate">{h.name}</span>
-                        <span className="block text-footnote text-label-2 truncate">{n.length ? `Night ${n.join(', ')}` : 'Not used'}{h.address ? ` · ${h.address}` : ''}</span>
+                        <span className="block text-footnote text-label-2 truncate">{[n.length ? `Night ${n.join(', ')}` : '', visits.length ? `Stop Day ${visits.join(', ')}` : ''].filter(Boolean).join(' · ') || 'Not used'}{h.address ? ` · ${h.address}` : ''}</span>
                       </span>
                     </button>
                     <button type="button" onClick={() => ops.removeHotel(h.uid)} aria-label={`Remove ${h.name}`}
@@ -191,6 +194,12 @@ function Pool({ trip, setTrip, ops, dnd, entryFor, onOpen }) {
                     <PriceCell value={h.price} label={`${h.name} price per night`} onCommit={v => ops.updateHotel(h.uid, { price: v })} />
                     <UnitPick hotel={h} onChange={p => ops.updateHotel(h.uid, p)} />
                     <MustStar size="sm" on={!!h.must} name={h.name} word="must-stay" onToggle={() => ops.updateHotel(h.uid, { must: !h.must })} />
+                    {/* A stop at the hotel during a day (check in, drop bags, rest); phones can't drag */}
+                    <select value="" onChange={e => e.target.value !== '' && ops.addHotelStop(h.uid, +e.target.value)} aria-label={`Add ${h.name} as a stop on a day`} title="Add as a stop in a day"
+                      className="ml-auto h-7 w-[76px] pl-1.5 rounded-[8px] bg-surface text-footnote font-semibold text-tint-ink outline-none focus:ring-2 focus:ring-tint cursor-pointer">
+                      <option value="">Stop…</option>
+                      {trip.days.map((_, i) => <option key={i} value={i}>Day {i + 1}</option>)}
+                    </select>
                   </div>
                   {nightlyMath(h, trip.guests) && (
                     <p className="mt-1 px-1 text-footnote text-label-2 tabular">{nightlyMath(h, trip.guests)} = <span className="font-semibold text-label">{peso(nightlyFor(h, trip.guests))}</span> / night</p>
@@ -218,6 +227,15 @@ function Pool({ trip, setTrip, ops, dnd, entryFor, onOpen }) {
         </div>
       </div>
     </section>
+  );
+}
+
+function CopyBtn({ name, onClick, small }) {
+  return (
+    <button type="button" onClick={onClick} aria-label={`Duplicate ${name}`} title="Duplicate"
+      className={`${small ? 'w-6 h-6 -mt-0.5 hidden group-hover:flex group-focus-within:flex group-focus:flex' : 'w-7 h-7 flex'} items-center justify-center text-label-3 hover:text-label pressable shrink-0`}>
+      <Copy className={small ? 'w-3.5 h-3.5' : 'w-4 h-4'} aria-hidden />
+    </button>
   );
 }
 
@@ -379,7 +397,9 @@ function DayColumn({ trip, i, info, height, y, backBy, ops, dnd, onOpen }) {
   const night = isLast ? null : stayOf(trip, i);
   const over = dnd.over && dnd.over !== 'pool' && dnd.over.day === i ? dnd.over : null;
   const carrying = dnd.drag;
-  const hotelOk = carrying?.kind === 'hotel' && !isLast;
+  const hotelOk = carrying?.kind === 'hotel';
+  // A hotel dropped on the night slot (or tonight's hotel) is where you sleep; anywhere else in the day it's a stop
+  const onNight = (e) => !isLast && !!e.target.closest?.('[data-night]');
 
   // Where in the day would a place land? Before the first spot whose middle is below the pointer.
   const indexAt = (e) => {
@@ -389,35 +409,36 @@ function DayColumn({ trip, i, info, height, y, backBy, ops, dnd, onOpen }) {
     return k < 0 ? stops.length : k;
   };
   const onOver = (e) => {
-    if (!carrying || (carrying.kind === 'hotel' && isLast)) return;
+    if (!carrying) return;
     e.preventDefault();
-    const index = carrying.kind === 'place' ? indexAt(e) : null;
-    if (!over || over.index !== index) dnd.setOver({ day: i, index });
+    if (carrying.kind === 'hotel' && onNight(e)) { if (!over?.night) dnd.setOver({ day: i, index: null, night: true }); return; }
+    const index = indexAt(e);
+    if (!over || over.night || over.index !== index) dnd.setOver({ day: i, index });
   };
   const onDrop = (e) => {
     e.preventDefault();
     const c = dnd.drag, o = over;
     dnd.end();
     if (!c) return;
-    if (c.kind === 'hotel') {
-      if (isLast) return;
+    const night = c.kind === 'hotel' && (o?.night || onNight(e));
+    if (night) {
       ops.setNight(i, c.id);
       if (typeof c.from === 'number' && c.from !== i) ops.setNight(c.from, null);
       return;
     }
-    const rest = stops.filter(s => s.place.uid !== c.id);
-    const at = o?.index ?? rest.length;
-    const before = stops[at] && stops[at].place.uid !== c.id ? stops[at].place.uid : rest[stops.slice(0, at).filter(s => s.place.uid !== c.id).length]?.place.uid ?? null;
-    ops.move(c.id, i, before);
+    // Before the first entry at or after the drop line that isn't the one being moved
+    const before = stops.slice(o?.index ?? stops.length).find(s => s.place.uid !== c.id)?.place.uid ?? null;
+    if (c.kind === 'hotel') ops.addHotelStop(c.id, i, before);
+    else ops.move(c.id, i, before);
   };
   const lastStop = stops[stops.length - 1];
-  const lineY = over && over.index != null ? (stops[over.index] ? stops[over.index].top - 2 : (lastStop ? lastStop.top + lastStop.h + 2 : y(info.ends) + 2)) : null;
+  const lineY = over && !over.night && over.index != null ? (stops[over.index] ? stops[over.index].top - 2 : (lastStop ? lastStop.top + lastStop.h + 2 : y(info.ends) + 2)) : null;
   // An empty day shows "Drag places here" at its leave time, so the night slot goes below that box
   const emptyNightY = d.stops.length ? Math.max(y(info.ends), info.bottom) + 8 : y(toMin(d.start)) + 64;
 
   return (
     <div onDragOver={onOver} onDrop={onDrop} onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) dnd.setOver(null); }}
-      className={`relative mx-1 rounded-[12px] transition-colors ${over ? (hotelOk ? 'bg-[rgba(88,86,214,0.10)]' : 'bg-tint-soft') : 'bg-fill/60'}`}
+      className={`relative mx-1 rounded-[12px] transition-colors ${over && !over.night ? (hotelOk ? 'bg-[rgba(88,86,214,0.10)]' : 'bg-tint-soft') : 'bg-fill/60'}`}
       style={{ height, backgroundImage: `repeating-linear-gradient(to bottom, var(--separator) 0 0.5px, transparent 0.5px ${60 * PX}px)` }}>
       {/* back-by line */}
       <div className="absolute inset-x-0 border-t border-dashed border-red/70 pointer-events-none" style={{ top: y(backBy) }}>
@@ -435,7 +456,7 @@ function DayColumn({ trip, i, info, height, y, backBy, ops, dnd, onOpen }) {
         if (e.type === 'travel') return <TravelBlock key={k} e={e} fuel={trip.fuel} />;
         if (e.type === 'leave') return <HotelBlock key={k} kind="leave" hotel={e.hotel} top={e.top} />;
         if (e.type === 'night') return (
-          <HotelBlock key={k} kind="night" hotel={e.hotel} guests={trip.guests} top={e.top} night={i + 1} pinned={!!d.pin}
+          <HotelBlock key={k} kind="night" hotel={e.hotel} guests={trip.guests} top={e.top} night={i + 1} pinned={!!d.pin} hot={!!over?.night}
             onPin={() => ops.togglePin(i)} onClear={() => ops.setNight(i, null)}
             onDragStart={dnd.start({ kind: 'hotel', id: e.hotel.uid, from: i })} onDragEnd={dnd.end} />
         );
@@ -443,10 +464,10 @@ function DayColumn({ trip, i, info, height, y, backBy, ops, dnd, onOpen }) {
       })}
 
       {!isLast && !night && (
-        <NightSlot top={emptyNightY} i={i} hotels={trip.hotels || []} ops={ops} hot={over && hotelOk} />
+        <NightSlot top={emptyNightY} i={i} hotels={trip.hotels || []} ops={ops} hot={!!over?.night} carrying={hotelOk} />
       )}
 
-      {lineY != null && <div className="absolute inset-x-1 h-1 rounded-full bg-tint pointer-events-none z-30" style={{ top: lineY }} aria-hidden />}
+      {lineY != null && <div className={`absolute inset-x-1 h-1 rounded-full pointer-events-none z-30 ${hotelOk ? 'bg-[#5856D6]' : 'bg-tint'}`} style={{ top: lineY }} aria-hidden />}
     </div>
   );
 }
@@ -462,7 +483,7 @@ function StopBlock({ e, i, late, ops, dnd, onOpen }) {
   return (
     <div draggable={!editing} onDragStart={dnd.start({ kind: 'place', id: p.uid, from: i })} onDragEnd={dnd.end} tabIndex={0}
       className={`group absolute inset-x-1 rounded-[10px] bg-surface shadow-[0_1px_3px_rgba(0,0,0,0.12)] overflow-hidden cursor-grab active:cursor-grabbing
-        hover:z-20 focus-within:z-20 ${note ? 'hover:min-h-[112px] focus-within:min-h-[112px] focus:min-h-[112px]' : 'hover:min-h-[76px] focus-within:min-h-[76px] focus:min-h-[76px]'} focus:z-20 outline-none focus:ring-2 focus:ring-tint
+        hover:z-20 focus-within:z-20 ${note ? 'hover:min-h-[136px] focus-within:min-h-[136px] focus:min-h-[136px]' : 'hover:min-h-[108px] focus-within:min-h-[108px] focus:min-h-[108px]'} focus:z-20 outline-none focus:ring-2 focus:ring-tint
         ${editing ? 'z-30 min-h-[150px] shadow-[0_8px_24px_rgba(0,0,0,0.18)]' : ''} ${late ? 'ring-1 ring-red' : ''} ${dnd.drag?.id === p.uid ? 'opacity-40' : ''}`}
       style={{ top: e.top, height: h }}>
       <span className="absolute inset-y-0 left-0 w-1" style={{ background: colorOf(p) }} aria-hidden />
@@ -470,7 +491,9 @@ function StopBlock({ e, i, late, ops, dnd, onOpen }) {
         <div className="flex items-start gap-0.5">
           <span className="min-w-0 flex-1">
             <button type="button" onClick={() => onOpen('place', p.uid)} title="Details"
-              className={`block w-full text-left text-footnote font-semibold leading-tight hover:text-tint-ink ${roomy ? 'line-clamp-2' : 'truncate'}`}>{p.name}</button>
+              className={`block w-full text-left text-footnote font-semibold leading-tight hover:text-tint-ink ${roomy ? 'line-clamp-2' : 'truncate'}`}>
+              {p.hotel && <BedDouble className="inline w-3 h-3 mr-1 -mt-0.5 text-[#5856D6]" aria-label="Hotel" />}{p.name}
+            </button>
             <span className={`flex items-center gap-0.5 text-[11px] tabular whitespace-nowrap ${late ? 'text-red-ink font-semibold' : 'text-label-2'}`}
               title={p.at ? (e.behind ? `Set for ${fmtClock(toMin(p.at))}: ${fmtDur(e.behind)} late` : `Set for ${fmtClock(toMin(p.at))}`) : undefined}>
               {p.at && <Clock className="w-3 h-3 shrink-0" aria-label="Fixed time" />}{fmtRange(e.from, e.to)}
@@ -481,7 +504,8 @@ function StopBlock({ e, i, late, ops, dnd, onOpen }) {
             className={`w-6 h-6 -mt-0.5 items-center justify-center pressable shrink-0 ${editing ? 'hidden' : roomy ? 'flex' : 'hidden group-hover:flex group-focus-within:flex group-focus:flex'} ${note ? 'text-orange-ink' : 'text-label-3 hover:text-label'}`}>
             <StickyNote className="w-3.5 h-3.5" aria-hidden />
           </button>
-          <button type="button" onClick={() => ops.move(p.uid, null)} aria-label={`Back to pool: ${p.name}`} title="Back to pool"
+          {!editing && <CopyBtn name={p.name} onClick={() => ops.duplicate(p.uid)} small />}
+          <button type="button" onClick={() => ops.move(p.uid, null)} aria-label={p.hotel ? `Remove stop: ${p.name}` : `Back to pool: ${p.name}`} title={p.hotel ? 'Remove' : 'Back to pool'}
             className="w-6 h-6 -mt-0.5 flex items-center justify-center text-label-3 hover:text-red-ink pressable shrink-0"><X className="w-3.5 h-3.5" aria-hidden /></button>
         </div>
         {editing ? (
@@ -525,7 +549,7 @@ function TravelBlock({ e, fuel }) {
   );
 }
 
-function HotelBlock({ kind, hotel, guests, top, night, pinned, onPin, onClear, onDragStart, onDragEnd }) {
+function HotelBlock({ kind, hotel, guests, top, night, pinned, hot, onPin, onClear, onDragStart, onDragEnd }) {
   if (kind !== 'night') {
     return (
       <div className="absolute inset-x-1 h-[22px] rounded-[8px] flex items-center gap-1 px-2 bg-[rgba(88,86,214,0.14)] text-[#5856D6]" style={{ top }}>
@@ -535,8 +559,8 @@ function HotelBlock({ kind, hotel, guests, top, night, pinned, onPin, onClear, o
     );
   }
   return (
-    <div draggable onDragStart={onDragStart} onDragEnd={onDragEnd}
-      className="absolute inset-x-1 h-[44px] rounded-[10px] bg-[#5856D6] text-white pl-2 pr-0.5 flex flex-col justify-center cursor-grab active:cursor-grabbing" style={{ top }}>
+    <div draggable onDragStart={onDragStart} onDragEnd={onDragEnd} data-night
+      className={`absolute inset-x-1 h-[44px] rounded-[10px] bg-[#5856D6] text-white pl-2 pr-0.5 flex flex-col justify-center cursor-grab active:cursor-grabbing transition-shadow ${hot ? 'ring-2 ring-offset-2 ring-[#5856D6] ring-offset-[var(--surface)]' : ''}`} style={{ top }}>
       <div className="flex items-center gap-1 min-w-0">
         <BedDouble className="w-3.5 h-3.5 shrink-0" aria-hidden />
         <span className="min-w-0 flex-1 truncate text-footnote font-semibold leading-tight">{hotel.name}</span>
@@ -554,10 +578,10 @@ function HotelBlock({ kind, hotel, guests, top, night, pinned, onPin, onClear, o
   );
 }
 
-function NightSlot({ top, i, hotels, ops, hot }) {
+function NightSlot({ top, i, hotels, ops, hot, carrying }) {
   return (
-    <div className={`absolute inset-x-1 rounded-[10px] border-2 border-dashed px-2 py-1.5 text-center ${hot ? 'border-[#5856D6] text-[#5856D6]' : 'border-separator text-label-3'}`} style={{ top }}>
-      <p className="text-[11px] font-semibold flex items-center justify-center gap-1"><BedDouble className="w-3.5 h-3.5" aria-hidden />Night {i + 1} · drop a hotel</p>
+    <div data-night className={`absolute inset-x-1 rounded-[10px] border-2 border-dashed px-2 py-1.5 text-center transition-colors ${hot ? 'border-[#5856D6] text-[#5856D6] bg-[rgba(88,86,214,0.10)]' : carrying ? 'border-[#5856D6]/50 text-[#5856D6]' : 'border-separator text-label-3'}`} style={{ top }}>
+      <p className="text-[11px] font-semibold flex items-center justify-center gap-1"><BedDouble className="w-3.5 h-3.5" aria-hidden />{carrying ? `Night ${i + 1} · sleep here` : `Night ${i + 1} · drop a hotel`}</p>
       {hotels.length > 0 && (
         <select value="" onChange={e => e.target.value && ops.setNight(i, e.target.value)} aria-label={`Hotel for night ${i + 1}`}
           className="mt-1 h-6 max-w-full px-1.5 rounded-[7px] bg-surface text-[11px] font-semibold text-tint-ink outline-none focus:ring-2 focus:ring-tint cursor-pointer">

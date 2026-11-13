@@ -203,7 +203,13 @@ function flattenHotels(t) {
   };
 }
 
-export const placesById = (trip) => Object.fromEntries(trip.pool.map(p => [p.uid, p]));
+/** A hotel stop shows its hotel's current name and spot (rename or move the hotel and its stops follow). */
+export const livePlace = (p, hotels = []) => {
+  if (!p?.hotel) return p;
+  const h = hotels.find(x => x.uid === p.hotel);
+  return h ? { ...p, name: h.name, area: h.address || h.area || '', lat: h.lat ?? null, lon: h.lon ?? null } : p;
+};
+export const placesById = (trip) => Object.fromEntries(trip.pool.map(p => [p.uid, livePlace(p, trip.hotels)]));
 export const stopsOf = (trip, i, byId = placesById(trip)) => trip.days[i].stops.map(u => byId[u]).filter(Boolean);
 /** uid → day index for every scheduled wishlist place. */
 export const dayOfPlace = (trip) => { const m = new Map(); trip.days.forEach((d, i) => d.stops.forEach(u => m.set(u, i))); return m; };
@@ -236,6 +242,19 @@ export const asEntry = ({ name, mins, at, spot }) => ({
   uid: uid(), id: `c-${uid()}`, name, area: spot?.area || '', lat: spot?.lat ?? null, lon: spot?.lon ?? null,
   cat: 'custom', custom: true, mins, at: at || null, must: false, wiki: null, tag: null,
 });
+
+/**
+ * A hotel as a timetable entry (check in, drop bags, rest…) in the middle of a day. Like a custom entry it
+ * keeps its place when the plan tools reorder the day; the night's hotel is still set separately.
+ */
+export const asHotelStop = (h, mins = 60) => ({
+  uid: uid(), id: `hs-${uid()}`, hotel: h.uid, name: h.name, area: h.address || h.area || '', lat: h.lat ?? null, lon: h.lon ?? null,
+  cat: 'stay', custom: true, mins, at: null, must: false, wiki: null, tag: null,
+});
+export const isHotelStop = (p) => !!p?.hotel;
+
+/** A copy of a pool entry with its own uid, so the same place can be on several days (or twice in one). */
+export const copyOf = (p) => ({ ...p, uid: uid(), id: p.custom ? `c-${uid()}` : p.id });
 
 export const routeKey = (pts) => pts.map(p => `${p.lon.toFixed(5)},${p.lat.toFixed(5)}`).join(';');
 

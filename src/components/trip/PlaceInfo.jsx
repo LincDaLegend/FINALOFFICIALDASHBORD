@@ -2,7 +2,7 @@
 
 // Details for one pool item (a place, your own entry, or a hotel), opened by clicking it.
 import { useEffect, useRef, useState } from 'react';
-import { X, MapPin, ExternalLink, Car, Ship, Clock, BedDouble, Trash2, BookOpen } from 'lucide-react';
+import { X, MapPin, ExternalLink, Car, Ship, Clock, BedDouble, Trash2, BookOpen, Copy } from 'lucide-react';
 import { DAYS, addDays, bookingLinks, fmtClock, fmtDur, peso, nightlyFor, nightlyMath, roomsFor, hasSpot } from './tripData.js';
 import { PlacePhoto, MustStar, DurationPick, PriceCell, UnitPick, fmtDay, fmtKm } from './tripUi.jsx';
 
@@ -42,6 +42,7 @@ function useAbout(item, enabled) {
   return [val, () => setTick(t => t + 1)]; // val: undefined = loading, null = nothing found, 'error' = couldn't ask
 }
 
+const toMin = (t) => { const [hh, mm] = (t || '00:00').split(':').map(Number); return hh * 60 + (mm || 0); };
 const mapsUrl = (p) => `https://www.google.com/maps/search/?api=1&query=${p.lat},${p.lon}`;
 
 /** A modal sheet: bottom sheet on phones, centred card on larger screens. */
@@ -124,7 +125,7 @@ function SpotInfo({ trip, ops, p, when, onClose }) {
         <div className="flex items-center gap-2">
           <select value={when ? when.day : ''} onChange={e => ops.move(p.uid, e.target.value === '' ? null : +e.target.value)} aria-label={`Day for ${p.name}`}
             className="h-8 pl-2 rounded-[9px] bg-surface text-subhead font-semibold text-tint-ink outline-none focus:ring-2 focus:ring-tint cursor-pointer min-w-0">
-            <option value="">Not on a day</option>
+            <option value="">{p.hotel ? 'Remove from the day' : 'Not on a day'}</option>
             {trip.days.map((_, i) => <option key={i} value={i}>{dayLabel(i)}</option>)}
           </select>
           {when && <span className={`text-subhead tabular ${when.late ? 'text-red-ink font-semibold' : 'text-label'}`}>{fmtClock(when.from)}–{fmtClock(when.to)}</span>}
@@ -177,10 +178,16 @@ function SpotInfo({ trip, ops, p, when, onClose }) {
         {about?.page && about !== 'error' && <LinkPill href={about.page}><BookOpen className="w-4 h-4" aria-hidden />Wikipedia</LinkPill>}
       </div>
 
-      <button type="button" onClick={() => { ops.remove(p.uid); onClose(); }}
-        className="w-full h-11 rounded-[12px] bg-fill text-body font-semibold text-red-ink flex items-center justify-center gap-2 pressable">
-        <Trash2 className="w-4 h-4" aria-hidden />Remove from trip
-      </button>
+      <div className="grid grid-cols-2 gap-2">
+        <button type="button" onClick={() => { ops.duplicate(p.uid); onClose(); }}
+          className="h-11 rounded-[12px] bg-fill text-body font-semibold text-tint-ink flex items-center justify-center gap-2 pressable">
+          <Copy className="w-4 h-4" aria-hidden />Duplicate
+        </button>
+        <button type="button" onClick={() => { ops.remove(p.uid); onClose(); }}
+          className="h-11 rounded-[12px] bg-fill text-body font-semibold text-red-ink flex items-center justify-center gap-2 pressable">
+          <Trash2 className="w-4 h-4" aria-hidden />{p.hotel ? 'Remove stop' : 'Remove'}
+        </button>
+      </div>
     </Shell>
   );
 }
@@ -190,6 +197,8 @@ function HotelInfo({ trip, ops, h, onClose }) {
   const area = (h.area || '').split(', ').pop();
   const links = hasSpot(h) ? bookingLinks({ lat: h.lat, lon: h.lon, area, checkin: addDays(trip.startDate, nights[0] ?? 0), guests: trip.guests, rooms: h.per === 'room' || !h.per ? roomsFor(trip.guests, h.sleeps) : roomsFor(trip.guests) }) : null;
   const toggleNight = (k) => ops.setNight(k, trip.days[k].hotel === h.uid ? null : h.uid);
+  const byUid = Object.fromEntries(trip.pool.map(p => [p.uid, p]));
+  const stops = trip.days.flatMap((d, day) => d.stops.filter(u => byUid[u]?.hotel === h.uid).map(u => ({ p: byUid[u], day })));
 
   return (
     <Shell onClose={onClose} photo={
@@ -224,6 +233,24 @@ function HotelInfo({ trip, ops, h, onClose }) {
             })}
           </div>
         </div>
+      </div>
+
+      <div>
+        <Label>Stops</Label>
+        <div className="flex flex-wrap items-center gap-1.5">
+          {stops.map(({ p, day }) => (
+            <span key={p.uid} className="inline-flex items-center gap-1 h-8 pl-3 pr-1 rounded-full bg-fill text-footnote font-semibold tabular">
+              Day {day + 1}{p.at ? ` · ${fmtClock(toMin(p.at))}` : ''} · {fmtDur(p.mins)}
+              <button type="button" onClick={() => ops.remove(p.uid)} aria-label={`Remove the Day ${day + 1} stop`} className="w-6 h-6 flex items-center justify-center text-label-3 hover:text-red-ink pressable"><X className="w-3.5 h-3.5" aria-hidden /></button>
+            </span>
+          ))}
+          <select value="" onChange={e => e.target.value !== '' && ops.addHotelStop(h.uid, +e.target.value)} aria-label={`Add ${h.name} as a stop on a day`}
+            className="h-8 pl-2 rounded-[9px] bg-fill text-footnote font-semibold text-tint-ink outline-none focus:ring-2 focus:ring-tint cursor-pointer">
+            <option value="">Add a stop…</option>
+            {trip.days.map((_, i) => <option key={i} value={i}>Day {i + 1}</option>)}
+          </select>
+        </div>
+        <p className="text-footnote text-label-2 mt-1.5">Check in, drop bags or rest during the day. Drag the hotel between entries to place it.</p>
       </div>
 
       <Notes value={h.note} label={`Notes for ${h.name}`} onChange={note => ops.updateHotel(h.uid, { note })} />

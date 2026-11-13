@@ -8,6 +8,8 @@ import { genId } from '../store.js';
 export const SALE_TYPES = ['Sale', 'Auction', 'Firesale'];
 export const SHIP = ['To Ship', 'On Hold', 'Shipped'];
 export const PAY = ['Paid', 'Unpaid'];
+/** Stored values stay as the old app wrote them; labels are sentence case. */
+export const shipLabel = (v) => ({ 'To Ship': 'To ship', 'On Hold': 'On hold' }[v] || v);
 
 export const peso = (n) => `${n < 0 ? '−' : ''}₱${Math.round(Math.abs(n || 0)).toLocaleString('en-PH')}`;
 export const pesoShort = (n) => {
@@ -29,19 +31,35 @@ export const costOf = (s) => num(s.costPrice) * unitsOf(s);
 export const profitOf = (s) => num(s.totalAmount) - costOf(s);
 export const isPaid = (s) => s.paymentStatus === 'Paid';
 
-/** Periods: this month, this year, or everything; each compares with the same stretch one month / year back. */
-export const PERIODS = [
-  { value: 'month', label: 'This month' },
-  { value: 'year', label: 'This year' },
+/**
+ * A period is { mode: 'month' | 'year' | 'all', y, m } (m 0–11). Step back and forward through months or years.
+ * Each compares with the one before it; the current month / year compares with the same days one back.
+ */
+export const PERIOD_MODES = [
+  { value: 'month', label: 'Month' },
+  { value: 'year', label: 'Year' },
   { value: 'all', label: 'All time' },
 ];
-export function periodRange(period, now = new Date()) {
-  if (period === 'all') return { from: null, to: null, prev: null };
-  const start = period === 'month' ? new Date(now.getFullYear(), now.getMonth(), 1) : new Date(now.getFullYear(), 0, 1);
-  const end = period === 'month' ? new Date(now.getFullYear(), now.getMonth() + 1, 0) : new Date(now.getFullYear(), 11, 31);
-  const back = (d) => (period === 'month' ? new Date(d.getFullYear(), d.getMonth() - 1, d.getDate()) : new Date(d.getFullYear() - 1, d.getMonth(), d.getDate()));
-  // The whole month / year so far (and anything dated later in it); compared with the same days a month / year back
-  return { from: ymd(start), to: ymd(end), prev: { from: ymd(back(start)), to: ymd(back(now)) } };
+export const currentPeriod = (mode = 'month', now = new Date()) => ({ mode, y: now.getFullYear(), m: now.getMonth() });
+const monthName = (y, m, style = 'long') => new Date(y, m, 1).toLocaleDateString('en-PH', { month: style });
+export const periodLabel = (p) => (p.mode === 'all' ? 'All time' : p.mode === 'year' ? String(p.y) : `${monthName(p.y, p.m)} ${p.y}`);
+export function shiftPeriod(p, dir) {
+  if (p.mode === 'year') return { ...p, y: p.y + dir };
+  const d = new Date(p.y, p.m + dir, 1);
+  return { ...p, y: d.getFullYear(), m: d.getMonth() };
+}
+export const isCurrent = (p, now = new Date()) => p.mode === 'all' || (p.y === now.getFullYear() && (p.mode === 'year' || p.m === now.getMonth()));
+export const isAfterNow = (p, now = new Date()) => p.mode !== 'all' && (p.y > now.getFullYear() || (p.mode === 'month' && p.y === now.getFullYear() && p.m > now.getMonth()));
+
+export function periodRange(p, now = new Date()) {
+  if (p.mode === 'all') return { from: null, to: null, prev: null, vs: null };
+  const start = p.mode === 'month' ? new Date(p.y, p.m, 1) : new Date(p.y, 0, 1);
+  const end = p.mode === 'month' ? new Date(p.y, p.m + 1, 0) : new Date(p.y, 11, 31);
+  const back = (d) => (p.mode === 'month' ? new Date(d.getFullYear(), d.getMonth() - 1, d.getDate()) : new Date(d.getFullYear() - 1, d.getMonth(), d.getDate()));
+  // A finished period compares with the whole one before it; the current one with the same days so far
+  const prevEnd = isCurrent(p, now) ? back(now) : (p.mode === 'month' ? new Date(p.y, p.m, 0) : new Date(p.y - 1, 11, 31));
+  const vs = p.mode === 'month' ? `vs ${monthName(start.getFullYear(), start.getMonth() - 1 < 0 ? 11 : start.getMonth() - 1)}` : `vs ${p.y - 1}`;
+  return { from: ymd(start), to: ymd(end), prev: { from: ymd(back(start)), to: ymd(prevEnd) }, vs };
 }
 export const inRange = (s, r) => !!r && (!r.from || s.date >= r.from) && (!r.to || s.date <= r.to);
 
@@ -60,11 +78,16 @@ export function totals(sales) {
 }
 export const change = (now, before) => (before > 0 ? (now - before) / before : null);
 
-/** The last 12 months, oldest first: { key: '2026-03', label: 'Mar', revenue, profit } (paid sales). */
-export function monthly(sales, now = new Date()) {
+/**
+ * Twelve months for the chart, oldest first: Jan–Dec of a year, or the 12 months up to a month (or now).
+ * Each: { key: '2026-03', label: 'Mar', year, revenue, profit, count } from paid sales.
+ */
+export function monthly(sales, p = { mode: 'all' }, now = new Date()) {
+  const endY = p.mode === 'all' ? now.getFullYear() : p.y;
+  const endM = p.mode === 'all' ? now.getMonth() : p.mode === 'year' ? 11 : p.m;
   const out = [];
   for (let k = 11; k >= 0; k--) {
-    const d = new Date(now.getFullYear(), now.getMonth() - k, 1);
+    const d = new Date(endY, endM - k, 1);
     const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
     out.push({ key, label: d.toLocaleDateString('en-PH', { month: 'short' }), year: d.getFullYear(), revenue: 0, profit: 0, count: 0 });
   }
@@ -75,6 +98,24 @@ export function monthly(sales, now = new Date()) {
     out[k].revenue += num(s.totalAmount); out[k].profit += profitOf(s); out[k].count++;
   });
   return out;
+}
+export const chartTitle = (p) => (p.mode === 'year' ? `${p.y} by month` : p.mode === 'month' ? `12 months to ${periodLabel(p)}` : 'Last 12 months');
+
+/** Expenses: { id, description, amount, category, date, notes } (same as the earlier app). */
+export const EXPENSE_CATEGORIES = ['Supplies', 'Shipping', 'Packaging', 'Fees', 'Marketing', 'Other'];
+export const expenseTotal = (list) => list.reduce((a, e) => a + num(e.amount), 0);
+
+/** Each inventory item's sales: units sold, revenue, profit, last sale date. */
+export function salesByItem(sales) {
+  const m = new Map();
+  sales.forEach(s => {
+    if (!s.inventoryId) return;
+    const x = m.get(s.inventoryId) || { units: 0, revenue: 0, profit: 0, count: 0, last: '' };
+    x.units += unitsOf(s); x.revenue += num(s.totalAmount); x.profit += profitOf(s); x.count++;
+    if (String(s.date) > x.last) x.last = String(s.date);
+    m.set(s.inventoryId, x);
+  });
+  return m;
 }
 
 export function stock(inventory) {

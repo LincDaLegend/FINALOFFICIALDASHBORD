@@ -5,10 +5,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { peso, pesoShort, pct } from './bizData.js';
 
-const H = 220, TOP = 12, BOTTOM = 26, LEFT = 52, RIGHT = 8;
+const H = 300, TOP = 12, BOTTOM = 28, LEFT = 56, RIGHT = 8;
 const SERIES = [
-  { key: 'revenue', label: 'Revenue', color: 'var(--series-1)' },
-  { key: 'profit', label: 'Profit', color: 'var(--series-2)' },
+  { key: 'revenue', label: 'Revenue', color: 'var(--series-rev)' },
+  { key: 'profit', label: 'Profit', color: 'var(--series-profit)' }, // the one that leads
 ];
 
 /** Round-number ticks covering [lo, hi]. */
@@ -30,7 +30,7 @@ function bar(x, w, y0, y1) {
   return `M${x},${y0}V${y1 - r}Q${x},${y1} ${x + r},${y1}H${x + w - r}Q${x + w},${y1} ${x + w},${y1 - r}V${y0}Z`;
 }
 
-export default function MonthlyChart({ data }) {
+export default function MonthlyChart({ data, title = 'Last 12 months', highlight = null }) {
   const box = useRef(null);
   const [w, setW] = useState(640);
   const [hover, setHover] = useState(null);
@@ -55,9 +55,9 @@ export default function MonthlyChart({ data }) {
   const h = hover != null ? data[hover] : null;
 
   return (
-    <div className="glass-card rounded-[20px] p-4 sm:p-5">
+    <div className="biz-card rounded-2xl p-5 min-w-0">
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-        <h2 className="text-headline">Last 12 months</h2>
+        <h2 className="text-headline font-medium">{title}</h2>
         <div className="flex items-center gap-4">
           {/* Legend: identity is never colour alone */}
           <ul className="flex items-center gap-3 text-footnote text-label-2" aria-label="Legend">
@@ -66,7 +66,7 @@ export default function MonthlyChart({ data }) {
             ))}
           </ul>
           <button type="button" onClick={() => setTable(v => !v)} aria-pressed={table}
-            className="h-7 px-2.5 rounded-full bg-fill text-footnote font-semibold text-tint-ink pressable">{table ? 'Chart' : 'Table'}</button>
+            className="h-7 px-2.5 rounded-[6px] bg-fill text-footnote font-medium text-label-2 hover:text-label transition-colors pressable">{table ? 'Chart' : 'Table'}</button>
         </div>
       </div>
 
@@ -94,16 +94,16 @@ export default function MonthlyChart({ data }) {
             {t.map(v => (
               <g key={v}>
                 <line x1={LEFT} x2={w - RIGHT} y1={y(v)} y2={y(v)} stroke="var(--separator)" strokeWidth={v === 0 ? 1 : 0.5} />
-                <text x={LEFT - 8} y={y(v)} dy="0.32em" textAnchor="end" className="fill-[var(--label-2)] text-[11px] tabular">{pesoShort(v)}</text>
+                <text x={LEFT - 8} y={y(v)} dy="0.32em" textAnchor="end" className="fill-[var(--label-2)] text-[11px] font-mono tabular">{pesoShort(v)}</text>
               </g>
             ))}
             {data.map((d, k) => {
               const x0 = LEFT + band * k + (band - (bw * 2 + 2)) / 2;
               return (
                 <g key={d.key}>
-                  {hover === k && <rect x={LEFT + band * k} y={TOP} width={band} height={plotH} rx={6} className="fill-[var(--fill)]" />}
+                  {(hover === k || (hover == null && highlight === d.key)) && <rect x={LEFT + band * k} y={TOP} width={band} height={plotH} rx={6} className="fill-[var(--fill)]" />}
                   {SERIES.map((s, j) => <path key={s.key} d={bar(x0 + j * (bw + 2), bw, y(0), y(d[s.key]))} fill={s.color} />)}
-                  <text x={LEFT + band * k + band / 2} y={H - 8} textAnchor="middle" className="fill-[var(--label-2)] text-[11px]">{d.label}</text>
+                  <text x={LEFT + band * k + band / 2} y={H - 8} textAnchor="middle" className="fill-[var(--label-2)] text-[11px] font-mono">{d.label}</text>
                   {/* Hit target: the whole month column */}
                   <rect x={LEFT + band * k} y={TOP} width={band} height={plotH + BOTTOM} fill="transparent" tabIndex={0}
                     aria-label={`${d.label} ${d.year}: revenue ${peso(d.revenue)}, profit ${peso(d.profit)}`}
@@ -114,7 +114,7 @@ export default function MonthlyChart({ data }) {
           </svg>
           {empty && <p className="absolute inset-x-0 top-[38%] text-center text-subhead text-label-2">No paid sales in the last 12 months</p>}
           {h && (
-            <div className="absolute top-0 pointer-events-none z-10 rounded-[12px] bg-surface shadow-[var(--shadow-lg)] px-3 py-2 text-footnote tabular min-w-[150px]"
+            <div className="absolute top-0 pointer-events-none z-10 rounded-[10px] biz-card shadow-[0_8px_24px_rgba(0,0,0,0.08)] px-3 py-2 text-footnote tabular min-w-[152px]"
               style={{ left: Math.min(w - 160, Math.max(0, LEFT + band * hover + band / 2 - 75)) }}>
               <p className="font-semibold text-label">{h.label} {h.year}</p>
               {SERIES.map(s => (

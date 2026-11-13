@@ -1,36 +1,47 @@
 'use client';
 
-// Business dashboard: Overview (glass stat cards, 12-month chart, by type, to-do), Inventory, Sales.
+// Business dashboard: Overview, Inventory, Sales (tied to inventory) and Expenses.
+// One period (a month, a year, or all time, browsable backwards) applies to Overview, Sales and Expenses.
 // Data: localStorage 'baller_biz_v1' via useBusinessStore (passed in as data / update).
 import { useMemo, useState } from 'react';
-import {
-  Wallet, TrendingUp, Package, Truck, HandCoins, ShoppingBag, Plus, Search, Download, Pencil, Trash2, Boxes, ReceiptText,
-} from 'lucide-react';
-import { Segmented, Button, Chip, EmptyState, useToast } from '../ui.jsx';
-import { GlassStat, FilterSelect } from './bizUi.jsx';
-import { ItemForm, SaleForm } from './bizForms.jsx';
+import { Package, Plus, Search, Download, Pencil, Trash2, ReceiptText, Wallet, X } from 'lucide-react';
+import { Segmented, Button, EmptyState, useToast } from '../ui.jsx';
+import { Stat, FilterSelect } from './bizUi.jsx';
+import { ItemForm, SaleForm, ExpenseForm } from './bizForms.jsx';
 import MonthlyChart from './MonthlyChart.jsx';
+import PeriodPicker from './PeriodPicker.jsx';
 import {
-  SALE_TYPES, SHIP, PERIODS, peso, pct, num, fmtDate, periodRange, inRange, totals, change, monthly, stock,
-  profitOf, unitsOf, isPaid, downloadCsv, ymd,
+  SALE_TYPES, EXPENSE_CATEGORIES, peso, pct, num, fmtDate, currentPeriod, periodLabel,
+  periodRange, inRange, totals, change, monthly, chartTitle, stock, expenseTotal, salesByItem, profitOf, unitsOf, isPaid, downloadCsv, ymd,
 } from './bizData.js';
 import './biz.css';
 
-const VIEWS = [{ value: 'overview', label: 'Overview' }, { value: 'inventory', label: 'Inventory' }, { value: 'sales', label: 'Sales' }];
+const VIEWS = [
+  { value: 'overview', label: 'Overview' }, { value: 'inventory', label: 'Inventory' },
+  { value: 'sales', label: 'Sales' }, { value: 'expenses', label: 'Expenses' },
+];
 const VIEW_KEY = 'bizView';
-const readView = () => { try { return localStorage.getItem(VIEW_KEY) || 'overview'; } catch { return 'overview'; } };
+const readView = () => { try { const v = localStorage.getItem(VIEW_KEY); return VIEWS.some(x => x.value === v) ? v : 'overview'; } catch { return 'overview'; } };
+const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+const inPeriod = (p) => (p.mode === 'all' ? 'all time' : `in ${periodLabel(p)}`);
 
 export default function BusinessDashboard({ data, update }) {
   const toast = useToast();
   const [view, setViewState] = useState(readView);
   const setView = (v) => { setViewState(v); try { localStorage.setItem(VIEW_KEY, v); } catch {} };
+  const [period, setPeriod] = useState(() => currentPeriod('month'));
+  const [itemQuery, setItemQuery] = useState('');   // Inventory search, set when jumping from a sale
+  const [saleItem, setSaleItem] = useState(null);   // Sales filtered to one inventory item
   const inventory = data.inventory || [];
   const sales = data.sales || [];
-  const [itemSheet, setItemSheet] = useState(null);  // { item | null }
-  const [saleSheet, setSaleSheet] = useState(null);  // { sale | null, preset | null }
+  const expenses = data.expenses || [];
+  const [itemSheet, setItemSheet] = useState(null);
+  const [saleSheet, setSaleSheet] = useState(null);
+  const [expenseSheet, setExpenseSheet] = useState(null);
 
   // Stock moves with sales: a sale from an inventory item takes its quantity; deleting / editing gives it back
   const restock = (inv, id, by) => inv.map(i => (i.id === id ? { ...i, quantity: Math.max(0, num(i.quantity) + by) } : i));
+  const undoable = (msg) => { const prev = data; return () => toast(msg, null, { label: 'Undo', onClick: () => update(prev) }); };
   const ops = {
     saveItem(item) {
       const isNew = !inventory.some(i => i.id === item.id);
@@ -39,9 +50,9 @@ export default function BusinessDashboard({ data, update }) {
       toast(isNew ? 'Item added' : 'Item saved');
     },
     removeItem(item) {
-      const prev = data;
+      const done = undoable(`Removed ${item.name}`);
       update(d => ({ ...d, inventory: d.inventory.filter(i => i.id !== item.id) }));
-      toast(`Removed ${item.name}`, null, { label: 'Undo', onClick: () => update(prev) });
+      done();
     },
     saveSale(sale) {
       const old = sales.find(s => s.id === sale.id);
@@ -49,97 +60,118 @@ export default function BusinessDashboard({ data, update }) {
         let inv = d.inventory || [];
         if (old?.inventoryId) inv = restock(inv, old.inventoryId, unitsOf(old));
         if (sale.inventoryId) inv = restock(inv, sale.inventoryId, -unitsOf(sale));
-        const list = old ? d.sales.map(s => (s.id === sale.id ? sale : s)) : [sale, ...(d.sales || [])];
-        return { ...d, inventory: inv, sales: list };
+        return { ...d, inventory: inv, sales: old ? d.sales.map(s => (s.id === sale.id ? sale : s)) : [sale, ...(d.sales || [])] };
       });
       setSaleSheet(null);
       toast(old ? 'Sale saved' : `Sale recorded · ${peso(sale.totalAmount)}`);
     },
     removeSale(sale) {
-      const prev = data;
+      const done = undoable('Sale deleted');
       update(d => ({ ...d, sales: d.sales.filter(s => s.id !== sale.id), inventory: sale.inventoryId ? restock(d.inventory || [], sale.inventoryId, unitsOf(sale)) : d.inventory }));
-      toast('Sale deleted', null, { label: 'Undo', onClick: () => update(prev) });
+      done();
     },
     patchSale(id, patch) { update(d => ({ ...d, sales: d.sales.map(s => (s.id === id ? { ...s, ...patch } : s)) })); },
+    saveExpense(e) {
+      const isNew = !expenses.some(x => x.id === e.id);
+      update(d => ({ ...d, expenses: isNew ? [e, ...(d.expenses || [])] : d.expenses.map(x => (x.id === e.id ? e : x)) }));
+      setExpenseSheet(null);
+      toast(isNew ? `Expense added · ${peso(e.amount)}` : 'Expense saved');
+    },
+    removeExpense(e) {
+      const done = undoable('Expense deleted');
+      update(d => ({ ...d, expenses: d.expenses.filter(x => x.id !== e.id) }));
+      done();
+    },
+    // Links between inventory and sales
     sell(item) { setSaleSheet({ sale: null, preset: item }); },
+    showItemSales(item) { setSaleItem({ id: item.id, name: item.name }); setView('sales'); },
+    showItem(sale) { const it = inventory.find(i => i.id === sale.inventoryId); if (!it) return; setItemQuery(it.sku || it.name); setView('inventory'); },
   };
 
   const categories = useMemo(() => [...new Set(inventory.map(i => i.category).filter(Boolean))].sort(), [inventory]);
-  const platforms = useMemo(() => [...new Set(['eBay', 'Facebook', 'Instagram', 'Carousell', 'Shopee', ...sales.map(s => s.platform).filter(Boolean)])], [sales]);
+  const firstYear = useMemo(() => Math.min(...[...sales, ...expenses].map(r => parseInt(String(r.date).slice(0, 4), 10)).filter(Boolean)), [sales, expenses]);
+  const expenseCats = useMemo(() => [...new Set([...EXPENSE_CATEGORIES, ...expenses.map(e => e.category).filter(Boolean)])], [expenses]);
+  const primary = view === 'expenses'
+    ? <Button size="sm" onClick={() => setExpenseSheet({ expense: null })}><Plus className="w-4 h-4" strokeWidth={2.5} aria-hidden />Add expense</Button>
+    : <Button size="sm" onClick={() => setSaleSheet({ sale: null, preset: null })}><Plus className="w-4 h-4" strokeWidth={2.5} aria-hidden />Record sale</Button>;
 
   return (
     <div className="biz-root min-h-dvh pb-28 lg:pb-16">
-      <div className="biz-wash" aria-hidden />
-      <div className="mx-auto max-w-[1180px] px-4 sm:px-6 pt-10 space-y-5">
+      <div className="mx-auto max-w-[1440px] px-4 sm:px-8 pt-10 space-y-6">
         <header className="flex flex-wrap items-end justify-between gap-3">
           <div>
             <h1 className="text-large-title">Business</h1>
-            <p className="text-subhead text-label-2 mt-1">{inventory.length} items · {sales.length} sales</p>
+            <p className="text-subhead text-label-2 tabular mt-1">{plural(inventory.length, 'item')} · {plural(sales.length, 'sale')} · {plural(expenses.length, 'expense')}</p>
           </div>
           <div className="flex gap-2">
-            <Button size="sm" variant="tinted" onClick={() => setItemSheet({ item: null })}><Package className="w-4 h-4" aria-hidden />Add item</Button>
-            <Button size="sm" onClick={() => setSaleSheet({ sale: null, preset: null })}><Plus className="w-4 h-4" strokeWidth={2.5} aria-hidden />Record sale</Button>
+            <Button size="sm" variant="gray" onClick={() => setItemSheet({ item: null })}><Package className="w-4 h-4" aria-hidden />Add item</Button>
+            {primary}
           </div>
         </header>
-        <div className="max-w-[420px]"><Segmented label="Section" value={view} onChange={setView} options={VIEWS} /></div>
 
-        {view === 'overview' && <Overview inventory={inventory} sales={sales} ops={ops} setView={setView} openSale={(s) => setSaleSheet({ sale: s })} />}
-        {view === 'inventory' && <Inventory inventory={inventory} categories={categories} ops={ops} onEdit={(item) => setItemSheet({ item })} onAdd={() => setItemSheet({ item: null })} />}
-        {view === 'sales' && <Sales sales={sales} ops={ops} onEdit={(s) => setSaleSheet({ sale: s })} onAdd={() => setSaleSheet({ sale: null, preset: null })} />}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="w-full sm:max-w-[480px]"><Segmented label="Section" value={view} onChange={setView} options={VIEWS} /></div>
+          {view !== 'inventory' && <PeriodPicker period={period} setPeriod={setPeriod} firstYear={firstYear} />}
+        </div>
+
+        {view === 'overview' && <Overview inventory={inventory} sales={sales} expenses={expenses} period={period} setView={setView} />}
+        {view === 'inventory' && <Inventory inventory={inventory} sales={sales} categories={categories} ops={ops} q={itemQuery} setQ={setItemQuery}
+          onEdit={(item) => setItemSheet({ item })} onAdd={() => setItemSheet({ item: null })} />}
+        {view === 'sales' && <Sales sales={sales} inventory={inventory} period={period} ops={ops} item={saleItem} clearItem={() => setSaleItem(null)}
+          onEdit={(s) => setSaleSheet({ sale: s })} onAdd={() => setSaleSheet({ sale: null, preset: null })} />}
+        {view === 'expenses' && <Expenses expenses={expenses} period={period} ops={ops} onEdit={(e) => setExpenseSheet({ expense: e })} onAdd={() => setExpenseSheet({ expense: null })} />}
       </div>
 
       <ItemForm open={!!itemSheet} item={itemSheet?.item || null} categories={categories} onClose={() => setItemSheet(null)} onSave={ops.saveItem} />
-      <SaleForm open={!!saleSheet} sale={saleSheet?.sale || null} preset={saleSheet?.preset || null} inventory={inventory} platforms={platforms}
+      <SaleForm open={!!saleSheet} sale={saleSheet?.sale || null} preset={saleSheet?.preset || null} inventory={inventory}
         onClose={() => setSaleSheet(null)} onSave={ops.saveSale} />
+      <ExpenseForm open={!!expenseSheet} expense={expenseSheet?.expense || null} categories={expenseCats} onClose={() => setExpenseSheet(null)} onSave={ops.saveExpense} />
     </div>
   );
 }
 
 // ─── Overview ────────────────────────────────────────────────────────────────
 
-function Overview({ inventory, sales, ops, setView, openSale }) {
-  const [period, setPeriod] = useState('month');
+function Overview({ inventory, sales, expenses, period, setView }) {
   const r = periodRange(period);
   const now = totals(sales.filter(s => inRange(s, r)));
   const before = r.prev ? totals(sales.filter(s => inRange(s, r.prev))) : null;
-  const all = totals(sales);
+  const spent = expenseTotal(expenses.filter(e => inRange(e, r)));
+  const spentBefore = r.prev ? expenseTotal(expenses.filter(e => inRange(e, r.prev))) : null;
+  const net = now.profit - spent, netBefore = before ? before.profit - spentBefore : null;
   const st = stock(inventory);
-  const months = useMemo(() => monthly(sales), [sales]);
-  const vs = period === 'month' ? 'vs last month' : period === 'year' ? 'vs last year' : null;
-
+  const months = useMemo(() => monthly(sales, period), [sales, period]);
+  const ch = (a, b) => (b == null ? null : change(a, b));
   const byType = SALE_TYPES.map(t => ({ type: t, ...totals(sales.filter(s => s.saleType === t && inRange(s, r))) }));
-  const todo = sales.filter(s => s.status !== 'Shipped' || !isPaid(s)).sort((a, b) => String(a.date).localeCompare(String(b.date))).slice(0, 6);
-  const recent = [...sales].sort((a, b) => String(b.date).localeCompare(String(a.date))).slice(0, 6);
+  const recent = sales.filter(s => inRange(s, r)).sort((a, b) => String(b.date).localeCompare(String(a.date))).slice(0, 6);
+  const highlight = period.mode === 'month' ? `${period.y}-${String(period.m + 1).padStart(2, '0')}` : null;
 
   return (
-    <div className="space-y-5">
-      <div className="max-w-[360px]"><Segmented label="Period" size="sm" value={period} onChange={setPeriod} options={PERIODS} /></div>
-
-      <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
-        <GlassStat label="Revenue" icon={Wallet} tint="#0A84FF" value={peso(now.revenue)} change={before ? change(now.revenue, before.revenue) : null}
-          sub={before && change(now.revenue, before.revenue) != null ? vs : `${now.count} sale${now.count === 1 ? '' : 's'}`} />
-        <GlassStat label="Profit" icon={TrendingUp} tint="#30B0C7" value={peso(now.profit)} change={before ? change(now.profit, before.profit) : null}
-          sub={now.margin != null ? `${pct(now.margin)} margin` : 'No paid sales'} />
-        <GlassStat label="Units sold" icon={ShoppingBag} tint="#5E5CE6" value={now.units.toLocaleString('en-PH')} change={before ? change(now.units, before.units) : null} sub={`${now.count} sales`} />
-        <GlassStat label="Owed to you" icon={HandCoins} tint="#FF9F0A" value={peso(all.owed)} sub={all.owedCount ? `${all.owedCount} unpaid` : 'All paid'} />
-        <GlassStat label="To ship" icon={Truck} tint="#FF375F" value={String(all.toShip)} sub={all.onHold ? `${all.onHold} on hold` : 'None on hold'} />
-        <GlassStat label="Stock value" icon={Boxes} tint="#34C759" value={peso(st.cost)} sub={`${st.units} units · ${peso(st.target)} at target`} />
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <Stat label="Revenue" value={peso(now.revenue)} change={ch(now.revenue, before?.revenue)} vs={r.vs} sub={ch(now.revenue, before?.revenue) == null ? plural(now.count, 'sale') : null} />
+        <Stat label="Profit on sales" value={peso(now.profit)} change={ch(now.profit, before?.profit)} vs={r.vs} sub={now.margin != null ? `${pct(now.margin)} margin` : 'No paid sales'} />
+        <Stat label="Expenses" value={peso(spent)} change={ch(spent, spentBefore)} vs={r.vs} invert />
+        <Stat label="Net profit" value={peso(net)} change={netBefore > 0 ? ch(net, netBefore) : null} vs={r.vs} sub="Profit minus expenses" />
       </div>
 
-      <MonthlyChart data={months} />
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(280px,1fr)] items-stretch">
+        <MonthlyChart data={months} title={chartTitle(period)} highlight={highlight} />
+        <StockSlab inventory={inventory} st={st} onOpen={() => setView('inventory')} />
+      </div>
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <section className="glass-card rounded-[20px] p-4 sm:p-5">
-          <h2 className="text-headline">By type <span className="text-subhead font-normal text-label-2">· {PERIODS.find(p => p.value === period).label.toLowerCase()}</span></h2>
-          <table className="w-full mt-2 text-subhead tabular">
-            <thead><tr className="text-footnote text-label-2 text-left"><th className="py-1.5 font-medium">Type</th><th className="py-1.5 font-medium text-right">Sales</th><th className="py-1.5 font-medium text-right">Revenue</th><th className="py-1.5 font-medium text-right">Profit</th><th className="py-1.5 font-medium text-right">Margin</th></tr></thead>
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(280px,1fr)] items-start">
+        <section className="biz-card rounded-2xl p-5 min-w-0">
+          <h2 className="text-headline font-medium">By type <span className="text-subhead font-normal text-label-2">· {periodLabel(period)}</span></h2>
+          <table className="w-full mt-3 text-subhead tabular">
+            <thead><tr className="text-footnote text-label-2 text-left"><th className="py-2 font-normal">Type</th><th className="py-2 font-normal text-right">Sales</th><th className="py-2 font-normal text-right">Revenue</th><th className="py-2 font-normal text-right">Profit</th><th className="py-2 font-normal text-right">Margin</th></tr></thead>
             <tbody>
               {byType.map(t => (
-                <tr key={t.type} className="shadow-[inset_0_0.5px_0_var(--separator)]">
-                  <td className="py-2 font-medium">{t.type}</td>
+                <tr key={t.type} className="shadow-[inset_0_1px_0_var(--hairline)]">
+                  <td className="py-2">{t.type}</td>
                   <td className="py-2 text-right text-label-2">{t.count}</td>
                   <td className="py-2 text-right">{peso(t.revenue)}</td>
-                  <td className={`py-2 text-right font-semibold ${t.profit < 0 ? 'text-red-ink' : ''}`}>{peso(t.profit)}</td>
+                  <td className={`py-2 text-right font-medium ${t.profit < 0 ? 'text-red-ink' : ''}`}>{peso(t.profit)}</td>
                   <td className="py-2 text-right text-label-2">{t.margin != null ? pct(t.margin) : '—'}</td>
                 </tr>
               ))}
@@ -147,69 +179,88 @@ function Overview({ inventory, sales, ops, setView, openSale }) {
           </table>
         </section>
 
-        <section className="glass-card rounded-[20px] p-4 sm:p-5">
-          <div className="flex items-baseline justify-between">
-            <h2 className="text-headline">To do</h2>
-            {todo.length > 0 && <button type="button" onClick={() => setView('sales')} className="text-subhead text-tint-ink">All sales</button>}
+        <section className="biz-card rounded-2xl p-5 min-w-0">
+          <div className="flex items-baseline justify-between gap-2">
+            <h2 className="text-headline font-medium">Sales</h2>
+            <button type="button" onClick={() => setView('sales')} className="text-footnote text-tint-ink">All sales</button>
           </div>
-          {todo.length ? (
-            <ul className="mt-2 space-y-1">
-              {todo.map(s => (
-                <li key={s.id} className="flex items-center gap-2 min-h-[40px]">
-                  <button type="button" onClick={() => openSale(s)} className="min-w-0 flex-1 text-left">
-                    <span className="block text-subhead font-medium truncate">{s.itemName}</span>
-                    <span className="block text-footnote text-label-2 truncate">{fmtDate(s.date)}{s.buyer ? ` · ${s.buyer}` : ''} · {peso(s.totalAmount)}</span>
-                  </button>
-                  {!isPaid(s) && <button type="button" onClick={() => ops.patchSale(s.id, { paymentStatus: 'Paid' })} className="h-7 px-2.5 rounded-full bg-orange-soft text-orange-ink text-footnote font-semibold pressable" title="Mark paid">Unpaid</button>}
-                  {s.status !== 'Shipped' && <button type="button" onClick={() => ops.patchSale(s.id, { status: 'Shipped' })} className="h-7 px-2.5 rounded-full bg-tint-soft text-tint-ink text-footnote font-semibold pressable" title="Mark shipped">{s.status}</button>}
+          {recent.length ? (
+            <ul className="mt-2">
+              {recent.map(s => (
+                <li key={s.id} className="flex items-center gap-3 h-9 text-subhead">
+                  <span className="text-footnote text-label-2 w-[48px] shrink-0 tabular">{fmtDate(s.date)}</span>
+                  <span className="min-w-0 flex-1 truncate">{s.itemName}</span>
+                  <span className="tabular">{peso(s.totalAmount)}</span>
                 </li>
               ))}
             </ul>
-          ) : <p className="text-subhead text-label-2 mt-2">Everything is paid and shipped.</p>}
-          {recent.length > 0 && (
-            <>
-              <h3 className="text-footnote font-semibold uppercase tracking-wide text-label-2 mt-4 mb-1">Recent</h3>
-              <ul className="space-y-0.5">
-                {recent.map(s => (
-                  <li key={s.id} className="flex items-center gap-2 text-subhead">
-                    <span className="text-footnote text-label-2 w-[52px] shrink-0 tabular">{fmtDate(s.date)}</span>
-                    <span className="min-w-0 flex-1 truncate">{s.itemName}</span>
-                    <span className="tabular font-medium">{peso(s.totalAmount)}</span>
-                  </li>
-                ))}
-              </ul>
-            </>
-          )}
+          ) : <p className="text-subhead text-label-2 mt-2">No sales {inPeriod(period)}</p>}
         </section>
       </div>
     </div>
   );
 }
 
+/** The moment: stock value beside a graded slab drawn in code, holding your most valuable card. */
+function StockSlab({ inventory, st, onOpen }) {
+  const top = inventory.filter(i => num(i.quantity) > 0).sort((a, b) => num(b.costPrice) - num(a.costPrice))[0];
+  return (
+    <section className="biz-card rounded-2xl p-5 min-w-0 flex flex-col">
+      <div className="flex items-baseline justify-between gap-2">
+        <p className="text-footnote text-label-2">Stock value · today</p>
+        <button type="button" onClick={onOpen} className="text-footnote text-tint-ink">Inventory</button>
+      </div>
+      <p className="text-[28px] font-medium tabular leading-none mt-2">{peso(st.cost)}</p>
+      <p className="text-footnote text-label-2 tabular mt-2">{plural(st.units, 'unit')} · {peso(st.target)} at target</p>
+      <div className="biz-slab mt-auto pt-2" aria-hidden={!top}>
+        <div className="biz-slab__label flex items-start justify-between gap-3 text-[#1c1c1e]">
+          <div className="min-w-0">
+            <p className="text-[12px] font-medium leading-4 truncate">{top ? top.name : 'No cards in stock'}</p>
+            <p className="text-[11px] leading-4 text-[#6e6e73] font-mono truncate">{top ? [top.sku, top.batchCode].filter(Boolean).join(' · ') || '—' : 'Add an item'}</p>
+          </div>
+          {top && (
+            <div className="text-right shrink-0">
+              <p className="text-[11px] leading-4 text-[#6e6e73]">Cost</p>
+              <p className="text-[13px] leading-4 font-medium font-mono tabular">{peso(top.costPrice)}</p>
+            </div>
+          )}
+        </div>
+        <div className="biz-slab__window">
+          <div className="absolute inset-y-3 left-1/2 -translate-x-1/2 w-[76px] rounded-[4px] bg-gradient-to-b from-[#3a3a3c] to-[#2c2c2e] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)] flex flex-col items-center justify-center">
+            <span className="text-[24px] font-medium text-white/90 tabular leading-none">{top ? num(top.quantity) : 0}</span>
+            <span className="text-[10px] text-white/55 mt-1">in stock</span>
+          </div>
+        </div>
+      </div>
+      {st.skus > 1 && <p className="text-footnote text-label-2 mt-3">Top card of {st.skus} by cost</p>}
+    </section>
+  );
+}
+
 // ─── Inventory ───────────────────────────────────────────────────────────────
 
-function Inventory({ inventory, categories, ops, onEdit, onAdd }) {
-  const [q, setQ] = useState('');
+function Inventory({ inventory, sales, categories, ops, q, setQ, onEdit, onAdd }) {
   const [cat, setCat] = useState('all');
   const [show, setShow] = useState('stock');
   const st = stock(inventory);
+  const sold = useMemo(() => salesByItem(sales), [sales]);
   const list = inventory
     .filter(i => (show === 'stock' ? num(i.quantity) > 0 : show === 'out' ? num(i.quantity) <= 0 : true))
     .filter(i => cat === 'all' || (i.category || '') === cat)
     .filter(i => !q.trim() || [i.name, i.sku, i.category, i.batchCode].join(' ').toLowerCase().includes(q.trim().toLowerCase()));
 
   const exportCsv = () => downloadCsv(`inventory-${ymd()}.csv`, [
-    ['Name', 'SKU', 'Category', 'Batch', 'Quantity', 'Cost each', 'Target each', 'Stock cost', 'Added'],
-    ...inventory.map(i => [i.name, i.sku, i.category, i.batchCode, num(i.quantity), num(i.costPrice), num(i.targetPrice), num(i.costPrice) * num(i.quantity), i.addedAt || '']),
+    ['Name', 'SKU', 'Category', 'Batch', 'In stock', 'Cost each', 'Target each', 'Sold', 'Sales revenue', 'Sales profit', 'Added'],
+    ...inventory.map(i => { const x = sold.get(i.id); return [i.name, i.sku, i.category, i.batchCode, num(i.quantity), num(i.costPrice), num(i.targetPrice), x?.units || 0, x?.revenue || 0, x?.profit || 0, i.addedAt || '']; }),
   ]);
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <GlassStat label="Items in stock" value={String(st.skus)} sub={`${st.units} units`} />
-        <GlassStat label="Stock at cost" value={peso(st.cost)} />
-        <GlassStat label="At target prices" value={peso(st.target)} />
-        <GlassStat label="Profit if sold at target" value={peso(st.target - st.cost)} sub={st.target ? `${pct((st.target - st.cost) / st.target)} margin` : null} />
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <Stat label="Items in stock" value={String(st.skus)} sub={plural(st.units, 'unit')} />
+        <Stat label="Stock at cost" value={peso(st.cost)} />
+        <Stat label="At target prices" value={peso(st.target)} />
+        <Stat label="Profit if sold at target" value={peso(st.target - st.cost)} sub={st.target ? `${pct((st.target - st.cost) / st.target)} margin` : null} />
       </div>
 
       <Toolbar q={q} setQ={setQ} placeholder="Search name, SKU, batch">
@@ -219,27 +270,38 @@ function Inventory({ inventory, categories, ops, onEdit, onAdd }) {
       </Toolbar>
 
       {list.length ? (
-        <div className="rounded-[18px] bg-surface overflow-hidden">
-          <div className="hidden md:grid grid-cols-[minmax(0,1fr)_70px_110px_110px_80px_150px] gap-3 px-4 py-2 text-footnote font-medium text-label-2 shadow-[inset_0_-0.5px_0_var(--separator)]">
-            <span>Item</span><span className="text-right">Qty</span><span className="text-right">Cost each</span><span className="text-right">Target each</span><span className="text-right">Margin</span><span />
+        <div className="biz-card rounded-2xl overflow-hidden">
+          <div className="hidden md:grid grid-cols-[minmax(0,1fr)_64px_104px_104px_minmax(150px,200px)_128px] gap-4 px-5 py-2 text-footnote text-label-2 shadow-[inset_0_-1px_0_var(--hairline)]">
+            <span>Item</span><span className="text-right">In stock</span><span className="text-right">Cost each</span><span className="text-right">Target each</span><span>Sold</span><span />
           </div>
           <ul>
             {list.map(i => {
               const cost = num(i.costPrice), target = num(i.targetPrice), qty = num(i.quantity);
-              const margin = target > 0 ? (target - cost) / target : null;
+              const x = sold.get(i.id);
               return (
-                <li key={i.id} className="grid grid-cols-[minmax(0,1fr)_auto] md:grid-cols-[minmax(0,1fr)_70px_110px_110px_80px_150px] gap-x-3 gap-y-1 items-center px-4 py-3 shadow-[inset_0_-0.5px_0_var(--separator)] last:shadow-none">
+                <li key={i.id} className="grid grid-cols-[minmax(0,1fr)_auto] md:grid-cols-[minmax(0,1fr)_64px_104px_104px_minmax(150px,200px)_128px] gap-x-4 gap-y-1 items-center px-5 py-3 shadow-[inset_0_-1px_0_var(--hairline)] last:shadow-none">
                   <div className="min-w-0">
-                    <p className="text-subhead font-semibold truncate">{i.name}</p>
-                    <p className="text-footnote text-label-2 truncate">{[i.sku, i.category, i.batchCode && `Batch ${i.batchCode}`].filter(Boolean).join(' · ')}</p>
+                    <p className="text-subhead font-medium truncate">{i.name}</p>
+                    <p className="flex items-center gap-2 mt-1 min-w-0 text-footnote text-label-2">
+                      {i.sku && <span className="biz-cert">{i.sku}</span>}
+                      {i.batchCode && <span className="biz-cert">B {i.batchCode}</span>}
+                      {i.category && <span className="truncate">{i.category}</span>}
+                    </p>
                   </div>
-                  <span className={`text-right text-subhead tabular font-semibold ${qty <= 0 ? 'text-label-3' : ''}`}><span className="md:hidden text-label-2 font-normal">Qty </span>{qty}</span>
+                  <span className={`text-right text-subhead tabular font-medium ${qty <= 0 ? 'text-label-3' : ''}`}>{qty <= 0 ? 'Sold out' : <><span className="md:hidden text-label-2 font-normal">In stock </span>{qty}</>}</span>
                   <span className="hidden md:block text-right text-subhead tabular">{peso(cost)}</span>
                   <span className="hidden md:block text-right text-subhead tabular">{target ? peso(target) : '—'}</span>
-                  <span className={`hidden md:block text-right text-subhead tabular ${margin != null && margin < 0 ? 'text-red-ink' : 'text-label-2'}`}>{margin != null ? pct(margin) : '—'}</span>
-                  <p className="md:hidden col-span-2 text-footnote text-label-2 tabular">{peso(cost)} cost · {target ? `${peso(target)} target` : 'no target'}{margin != null ? ` · ${pct(margin)}` : ''}</p>
+                  {/* Sales of this item: tap to see them */}
+                  <span className="col-span-2 md:col-span-1 min-w-0">
+                    {x ? (
+                      <button type="button" onClick={() => ops.showItemSales(i)} className="text-left text-footnote tabular hover:text-tint-ink transition-colors" title="See these sales">
+                        <span className="text-label">{x.units} sold</span>
+                        <span className="text-label-2"> · <span className={x.profit < 0 ? 'text-red-ink' : 'text-green-ink'}>{x.profit >= 0 ? '+' : ''}{peso(x.profit)}</span> · {fmtDate(x.last)}</span>
+                      </button>
+                    ) : <span className="text-footnote text-label-3">Not sold yet</span>}
+                  </span>
                   <div className="col-span-2 md:col-span-1 flex justify-end gap-1">
-                    <Button size="sm" variant="tinted" onClick={() => ops.sell(i)} disabled={qty <= 0}>Sell</Button>
+                    <Button size="sm" variant="gray" onClick={() => ops.sell(i)} disabled={qty <= 0}>Sell</Button>
                     <IconBtn label={`Edit ${i.name}`} onClick={() => onEdit(i)}><Pencil className="w-4 h-4" aria-hidden /></IconBtn>
                     <IconBtn label={`Delete ${i.name}`} onClick={() => ops.removeItem(i)} danger><Trash2 className="w-4 h-4" aria-hidden /></IconBtn>
                   </div>
@@ -249,10 +311,10 @@ function Inventory({ inventory, categories, ops, onEdit, onAdd }) {
           </ul>
         </div>
       ) : (
-        <div className="rounded-[18px] bg-surface">
+        <div className="biz-card rounded-2xl">
           <EmptyState icon={<Package className="w-6 h-6" aria-hidden />} title={inventory.length ? 'Nothing matches' : 'No inventory yet'}
             action={!inventory.length && <Button onClick={onAdd}><Plus className="w-4 h-4" aria-hidden />Add item</Button>}>
-            {inventory.length ? 'Try another search or filter.' : 'Add the cards you have to track stock, cost and profit.'}
+            {inventory.length ? 'Try another search or filter' : 'Add the cards you have; sales from them update stock and profit'}
           </EmptyState>
         </div>
       )}
@@ -260,77 +322,76 @@ function Inventory({ inventory, categories, ops, onEdit, onAdd }) {
   );
 }
 
-// ─── Sales ───────────────────────────────────────────────────────────────────
+// ─── Sales: date, item (linked to inventory), qty, total, profit ──────────────
 
-function Sales({ sales, ops, onEdit, onAdd }) {
+function Sales({ sales, inventory, period, ops, item, clearItem, onEdit, onAdd }) {
   const [q, setQ] = useState('');
-  const [period, setPeriod] = useState('all');
-  const [type, setType] = useState('all');
-  const [pay, setPay] = useState('all');
-  const [ship, setShip] = useState('all');
-  const r = periodRange(period);
+  const shown = item ? { mode: 'all' } : period; // one item's sales: all time
+  const r = periodRange(shown);
+  const byId = useMemo(() => new Map(inventory.map(i => [i.id, i])), [inventory]);
   const list = sales
     .filter(s => inRange(s, r))
-    .filter(s => type === 'all' || s.saleType === type)
-    .filter(s => pay === 'all' || s.paymentStatus === pay)
-    .filter(s => ship === 'all' || s.status === ship)
-    .filter(s => !q.trim() || [s.itemName, s.buyer, s.platform, s.notes].join(' ').toLowerCase().includes(q.trim().toLowerCase()))
+    .filter(s => !item || s.inventoryId === item.id)
+    .filter(s => !q.trim() || [s.itemName, s.buyer, s.platform, s.notes, byId.get(s.inventoryId)?.sku].join(' ').toLowerCase().includes(q.trim().toLowerCase()))
     .sort((a, b) => String(b.date).localeCompare(String(a.date)));
   const t = totals(list);
-  const nextShip = (s) => SHIP[(SHIP.indexOf(s.status) + 1) % SHIP.length];
 
   const exportCsv = () => downloadCsv(`sales-${ymd()}.csv`, [
-    ['Date', 'Item', 'Type', 'Qty', 'Total', 'Cost each', 'Profit', 'Payment', 'Shipping', 'Buyer', 'Platform', 'Notes'],
-    ...list.map(s => [s.date, s.itemName, s.saleType, unitsOf(s), num(s.totalAmount), num(s.costPrice), profitOf(s), s.paymentStatus, s.status, s.buyer, s.platform, s.notes]),
+    ['Date', 'Item', 'SKU', 'Qty', 'Total', 'Cost each', 'Profit', 'Type', 'Payment', 'Buyer', 'Notes'],
+    ...list.map(s => [s.date, s.itemName, byId.get(s.inventoryId)?.sku || '', unitsOf(s), num(s.totalAmount), num(s.costPrice), profitOf(s), s.saleType, s.paymentStatus, s.buyer, s.notes]),
   ]);
 
   return (
     <div className="space-y-4">
-      <Toolbar q={q} setQ={setQ} placeholder="Search item, buyer, platform">
-        <FilterSelect label="Period" value={period} onChange={setPeriod} options={PERIODS} />
-        <FilterSelect label="Type" value={type} onChange={setType} options={[{ value: 'all', label: 'All types' }, ...SALE_TYPES.map(x => ({ value: x, label: x }))]} />
-        <FilterSelect label="Payment" value={pay} onChange={setPay} options={[{ value: 'all', label: 'Paid & unpaid' }, { value: 'Paid', label: 'Paid' }, { value: 'Unpaid', label: 'Unpaid' }]} />
-        <FilterSelect label="Shipping" value={ship} onChange={setShip} options={[{ value: 'all', label: 'Any shipping' }, ...SHIP.map(x => ({ value: x, label: x }))]} />
+      <Toolbar q={q} setQ={setQ} placeholder="Search item, SKU, buyer">
+        {item && (
+          <button type="button" onClick={clearItem} className="biz-tag h-9 gap-1.5 px-3" title="Show all items">
+            {item.name}<X className="w-3.5 h-3.5" aria-label="Clear" />
+          </button>
+        )}
         <Button size="sm" variant="gray" onClick={exportCsv} disabled={!list.length}><Download className="w-4 h-4" aria-hidden />CSV</Button>
       </Toolbar>
 
       {list.length > 0 && (
         <p className="text-subhead text-label-2 tabular px-1">
-          {t.count} sales · <span className="font-semibold text-label">{peso(t.revenue)}</span> paid · profit{' '}
-          <span className={`font-semibold ${t.profit < 0 ? 'text-red-ink' : 'text-label'}`}>{peso(t.profit)}</span>
-          {t.owed > 0 && <> · {peso(t.owed)} unpaid</>}
+          {plural(t.count, 'sale')} {inPeriod(shown)} · <span className="font-medium text-label">{peso(t.revenue)}</span> · profit{' '}
+          <span className={`font-medium ${t.profit < 0 ? 'text-red-ink' : 'text-label'}`}>{peso(t.profit)}</span>
+          {t.owed > 0 && <> · {peso(t.owed)} not paid yet</>}
         </p>
       )}
 
       {list.length ? (
-        <div className="rounded-[18px] bg-surface overflow-hidden">
-          <div className="hidden md:grid grid-cols-[64px_minmax(0,1fr)_80px_110px_100px_90px_100px_72px] gap-3 px-4 py-2 text-footnote font-medium text-label-2 shadow-[inset_0_-0.5px_0_var(--separator)]">
-            <span>Date</span><span>Item</span><span>Type</span><span className="text-right">Total</span><span className="text-right">Profit</span><span>Payment</span><span>Shipping</span><span />
+        <div className="biz-card rounded-2xl overflow-hidden">
+          <div className="hidden md:grid grid-cols-[64px_minmax(0,1fr)_48px_112px_104px_72px] gap-4 px-5 py-2 text-footnote text-label-2 shadow-[inset_0_-1px_0_var(--hairline)]">
+            <span>Date</span><span>Item</span><span className="text-right">Qty</span><span className="text-right">Total</span><span className="text-right">Profit</span><span />
           </div>
           <ul>
             {list.map(s => {
-              const p = profitOf(s);
+              const p = profitOf(s), it = byId.get(s.inventoryId);
               return (
-                <li key={s.id} className="grid grid-cols-[minmax(0,1fr)_auto] md:grid-cols-[64px_minmax(0,1fr)_80px_110px_100px_90px_100px_72px] gap-x-3 gap-y-1.5 items-center px-4 py-3 shadow-[inset_0_-0.5px_0_var(--separator)] last:shadow-none">
+                <li key={s.id} className="grid grid-cols-[minmax(0,1fr)_auto] md:grid-cols-[64px_minmax(0,1fr)_48px_112px_104px_72px] gap-x-4 gap-y-1 items-center px-5 py-3 shadow-[inset_0_-1px_0_var(--hairline)] last:shadow-none">
                   <span className="hidden md:block text-footnote text-label-2 tabular">{fmtDate(s.date)}</span>
                   <div className="min-w-0">
-                    <p className="text-subhead font-semibold truncate">{s.itemName}</p>
-                    <p className="text-footnote text-label-2 truncate"><span className="md:hidden">{fmtDate(s.date)} · {s.saleType} · </span>{[unitsOf(s) > 1 && `${unitsOf(s)} units`, s.buyer, s.platform].filter(Boolean).join(' · ') || '—'}</p>
+                    <p className="text-subhead font-medium truncate">{s.itemName}</p>
+                    <p className="flex items-center gap-2 mt-1 min-w-0 text-footnote text-label-2">
+                      <span className="md:hidden tabular">{fmtDate(s.date)}</span>
+                      {it ? (
+                        <button type="button" onClick={() => ops.showItem(s)} className="biz-cert hover:text-label transition-colors" title="Open in inventory">{it.sku || 'Inventory'}</button>
+                      ) : s.inventoryId ? <span className="text-label-3">Item deleted</span> : <span className="text-label-3">Not in inventory</span>}
+                      {!isPaid(s) && (
+                        <button type="button" onClick={() => ops.patchSale(s.id, { paymentStatus: 'Paid' })} className="biz-tag biz-tag--warn h-5 px-1.5 text-[11px]" title="Mark paid">Not paid</button>
+                      )}
+                      {s.buyer && <span className="truncate">{s.buyer}</span>}
+                    </p>
                   </div>
-                  <span className="hidden md:block"><Chip>{s.saleType}</Chip></span>
-                  <span className="text-right text-subhead font-semibold tabular">{peso(s.totalAmount)}
-                    <span className={`md:hidden block text-footnote font-medium ${p < 0 ? 'text-red-ink' : 'text-green-ink'}`}>{p >= 0 ? '+' : ''}{peso(p)}</span>
+                  <span className="hidden md:block text-right text-subhead tabular text-label-2">{unitsOf(s)}</span>
+                  <span className="text-right text-subhead font-medium tabular">{peso(s.totalAmount)}
+                    <span className={`md:hidden block text-footnote font-normal ${p < 0 ? 'text-red-ink' : 'text-green-ink'}`}>{p >= 0 ? '+' : ''}{peso(p)}</span>
                   </span>
-                  <span className={`hidden md:block text-right text-subhead tabular font-medium ${p < 0 ? 'text-red-ink' : 'text-green-ink'}`}>{p >= 0 ? '+' : ''}{peso(p)}</span>
-                  <div className="col-span-2 md:contents flex items-center gap-2">
-                    <button type="button" onClick={() => ops.patchSale(s.id, { paymentStatus: isPaid(s) ? 'Unpaid' : 'Paid' })} title="Tap to change" aria-label={`${s.itemName}: ${s.paymentStatus}. Change`}
-                      className={`h-7 px-2.5 rounded-full text-footnote font-semibold justify-self-start pressable ${isPaid(s) ? 'bg-green-soft text-green-ink' : 'bg-orange-soft text-orange-ink'}`}>{s.paymentStatus}</button>
-                    <button type="button" onClick={() => ops.patchSale(s.id, { status: nextShip(s) })} title={`Tap for ${nextShip(s)}`} aria-label={`${s.itemName}: ${s.status}. Change to ${nextShip(s)}`}
-                      className={`h-7 px-2.5 rounded-full text-footnote font-semibold justify-self-start whitespace-nowrap pressable ${s.status === 'Shipped' ? 'bg-fill text-label-2' : s.status === 'On Hold' ? 'bg-red-soft text-red-ink' : 'bg-tint-soft text-tint-ink'}`}>{s.status}</button>
-                    <div className="ml-auto md:ml-0 flex justify-end gap-1">
-                      <IconBtn label={`Edit sale of ${s.itemName}`} onClick={() => onEdit(s)}><Pencil className="w-4 h-4" aria-hidden /></IconBtn>
-                      <IconBtn label={`Delete sale of ${s.itemName}`} onClick={() => ops.removeSale(s)} danger><Trash2 className="w-4 h-4" aria-hidden /></IconBtn>
-                    </div>
+                  <span className={`hidden md:block text-right text-subhead tabular ${p < 0 ? 'text-red-ink' : 'text-green-ink'}`}>{p >= 0 ? '+' : ''}{peso(p)}</span>
+                  <div className="col-span-2 md:col-span-1 flex justify-end gap-1">
+                    <IconBtn label={`Edit sale of ${s.itemName}`} onClick={() => onEdit(s)}><Pencil className="w-4 h-4" aria-hidden /></IconBtn>
+                    <IconBtn label={`Delete sale of ${s.itemName}`} onClick={() => ops.removeSale(s)} danger><Trash2 className="w-4 h-4" aria-hidden /></IconBtn>
                   </div>
                 </li>
               );
@@ -338,10 +399,77 @@ function Sales({ sales, ops, onEdit, onAdd }) {
           </ul>
         </div>
       ) : (
-        <div className="rounded-[18px] bg-surface">
-          <EmptyState icon={<ReceiptText className="w-6 h-6" aria-hidden />} title={sales.length ? 'Nothing matches' : 'No sales yet'}
+        <div className="biz-card rounded-2xl">
+          <EmptyState icon={<ReceiptText className="w-6 h-6" aria-hidden />} title={sales.length ? `No sales ${inPeriod(shown)}` : 'No sales yet'}
             action={!sales.length && <Button onClick={onAdd}><Plus className="w-4 h-4" aria-hidden />Record sale</Button>}>
-            {sales.length ? 'Try another search or filter.' : 'Record a sale here, or use Sell on an inventory item.'}
+            {sales.length ? 'Try another period or search' : 'Pick an item from inventory and its stock goes down'}
+          </EmptyState>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Expenses: date, what for, category, amount ──────────────────────────────
+
+function Expenses({ expenses, period, ops, onEdit, onAdd }) {
+  const [q, setQ] = useState('');
+  const r = periodRange(period);
+  const list = expenses
+    .filter(e => inRange(e, r))
+    .filter(e => !q.trim() || [e.description, e.category, e.notes].join(' ').toLowerCase().includes(q.trim().toLowerCase()))
+    .sort((a, b) => String(b.date).localeCompare(String(a.date)));
+  const total = expenseTotal(list);
+  const byCat = [...list.reduce((m, e) => m.set(e.category || 'Other', (m.get(e.category || 'Other') || 0) + num(e.amount)), new Map())].sort((a, b) => b[1] - a[1]);
+
+  const exportCsv = () => downloadCsv(`expenses-${ymd()}.csv`, [['Date', 'What for', 'Category', 'Amount', 'Notes'], ...list.map(e => [e.date, e.description, e.category, num(e.amount), e.notes])]);
+
+  return (
+    <div className="space-y-4">
+      <Toolbar q={q} setQ={setQ} placeholder="Search expenses">
+        <Button size="sm" variant="gray" onClick={exportCsv} disabled={!list.length}><Download className="w-4 h-4" aria-hidden />CSV</Button>
+      </Toolbar>
+
+      {list.length ? (
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(260px,1fr)] items-start">
+          <div className="biz-card rounded-2xl overflow-hidden">
+            <ul>
+              {list.map(e => (
+                <li key={e.id} className="grid grid-cols-[56px_minmax(0,1fr)_auto_72px] gap-x-4 items-center px-5 py-3 shadow-[inset_0_-1px_0_var(--hairline)] last:shadow-none">
+                  <span className="text-footnote text-label-2 tabular">{fmtDate(e.date)}</span>
+                  <div className="min-w-0">
+                    <p className="text-subhead font-medium truncate">{e.description}</p>
+                    <p className="text-footnote text-label-2 truncate">{[e.category, e.notes].filter(Boolean).join(' · ')}</p>
+                  </div>
+                  <span className="text-right text-subhead font-medium tabular">{peso(e.amount)}</span>
+                  <div className="flex justify-end gap-1">
+                    <IconBtn label={`Edit ${e.description}`} onClick={() => onEdit(e)}><Pencil className="w-4 h-4" aria-hidden /></IconBtn>
+                    <IconBtn label={`Delete ${e.description}`} onClick={() => ops.removeExpense(e)} danger><Trash2 className="w-4 h-4" aria-hidden /></IconBtn>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
+          <section className="biz-card rounded-2xl p-5">
+            <p className="text-footnote text-label-2">Spent {inPeriod(period)}</p>
+            <p className="text-[28px] font-medium tabular leading-none mt-2">{peso(total)}</p>
+            <p className="text-footnote text-label-2 tabular mt-2">{plural(list.length, 'expense')}</p>
+            {/* Share by category: a ranked list with thin bars */}
+            <ul className="mt-4 space-y-3">
+              {byCat.map(([c, v]) => (
+                <li key={c}>
+                  <div className="flex items-baseline justify-between text-subhead"><span>{c}</span><span className="tabular">{peso(v)}</span></div>
+                  <div className="mt-1 h-1 rounded-full bg-fill overflow-hidden"><div className="h-full rounded-full bg-[var(--series-rev)]" style={{ width: `${total ? (v / total) * 100 : 0}%` }} /></div>
+                </li>
+              ))}
+            </ul>
+          </section>
+        </div>
+      ) : (
+        <div className="biz-card rounded-2xl">
+          <EmptyState icon={<Wallet className="w-6 h-6" aria-hidden />} title={expenses.length ? `No expenses ${inPeriod(period)}` : 'No expenses yet'}
+            action={<Button onClick={onAdd}><Plus className="w-4 h-4" aria-hidden />Add expense</Button>}>
+            {expenses.length ? 'Try another period or search' : 'Supplies, shipping and fees come off your profit'}
           </EmptyState>
         </div>
       )}
@@ -357,7 +485,7 @@ function Toolbar({ q, setQ, placeholder, children }) {
       <label className="relative flex-1 min-w-[200px]">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-label-2" aria-hidden />
         <input value={q} onChange={e => setQ(e.target.value)} placeholder={placeholder} aria-label={placeholder}
-          className="w-full h-9 pl-9 pr-3 rounded-full bg-surface text-subhead outline-none focus:ring-2 focus:ring-tint placeholder:text-label-3" />
+          className="w-full h-9 pl-9 pr-3 rounded-[10px] biz-card text-subhead outline-none focus:ring-2 focus:ring-tint placeholder:text-label-3" />
       </label>
       {children}
     </div>
@@ -367,7 +495,7 @@ function Toolbar({ q, setQ, placeholder, children }) {
 function IconBtn({ label, onClick, danger, children }) {
   return (
     <button type="button" onClick={onClick} aria-label={label} title={label}
-      className={`w-8 h-8 rounded-full flex items-center justify-center pressable ${danger ? 'text-label-3 hover:text-red-ink hover:bg-red-soft' : 'text-label-2 hover:text-label hover:bg-fill'}`}>
+      className={`w-8 h-8 rounded-[8px] flex items-center justify-center transition-colors pressable ${danger ? 'text-label-3 hover:text-red-ink hover:bg-red-soft' : 'text-label-2 hover:text-label hover:bg-fill'}`}>
       {children}
     </button>
   );
